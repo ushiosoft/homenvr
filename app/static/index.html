@@ -360,7 +360,11 @@ function jumpEvent(dir) {
   const next = dir > 0 ? events.find(e => e.ts > t + 1) : [...events].reverse().find(e => e.ts < t - 1);
   if (next) playAt(next.ts);
 }
-function playheadTime() { return current ? current.start + $('#player').currentTime : null; }
+// Recordings are HEVC, which browsers can't play directly, so playback streams an
+// on-the-fly H.264 transcode window starting at the chosen time.
+let playStart = null;
+const PLAY_WINDOW = 300;  // seconds transcoded per request; auto-continues
+function playheadTime() { return playStart != null ? playStart + $('#player').currentTime : null; }
 function moveCursor() {
   const t = playheadTime(), c = $('#cursor');
   if (!c) return;
@@ -368,17 +372,17 @@ function moveCursor() {
   if (t) { c.style.left = ((t - dayStart)/DAY*100) + '%'; $('#now').textContent = new Date(t*1000).toLocaleString(); }
 }
 function playAt(t) {
-  let s = segs.find(x => t >= x.start && t < x.end) || segs.find(x => x.start >= t);
-  if (!s) return;
+  if (!segs.length) return;
+  playStart = Math.floor(t);
   const v = $('#player');
-  const offset = Math.max(0, t - s.start);
-  if (current?.name !== s.name) { current = s; v.src = s.url; v.addEventListener('loadedmetadata', () => { v.currentTime = offset; v.play(); }, { once: true }); }
-  else { v.currentTime = offset; v.play(); }
+  v.src = `api/cameras/${$('#cam').value}/playback.mp4?start=${playStart}&dur=${PLAY_WINDOW}`;
+  v.load(); v.play().catch(() => {});
 }
 $('#player').addEventListener('timeupdate', moveCursor);
-$('#player').addEventListener('ended', () => { // continue into the next segment
-  const i = segs.findIndex(x => x.name === current?.name);
-  if (i >= 0 && segs[i+1]) playAt(segs[i+1].start);
+$('#player').addEventListener('ended', () => {  // continue into the next window if footage exists
+  if (playStart == null) return;
+  const next = playStart + PLAY_WINDOW;
+  if (segs.some(s => s.end > next && s.start < dayStart + DAY)) playAt(next);
 });
 makeInteractive($('#player'));
 function applyPlayerRotation() {

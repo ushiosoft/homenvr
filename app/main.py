@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
@@ -100,6 +100,42 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
                 return []
             store = EventStore(cfg.events_db)
         return await asyncio.to_thread(store.query, cam_id, start, end)
+
+    @app.get("/api/cameras/{cam_id}/playback.mp4")
+    async def playback(cam_id: str, start: float = Query(...), dur: float = Query(300)):
+        """Transcode a window [start, start+dur) to H.264 and stream it progressively
+        (fragmented MP4), so HEVC recordings are playable in any browser."""
+        camera_or_404(cam_id)
+        dur = min(max(dur, 1), 1800)
+        script = storage.concat_list(cam_id, start, start + dur)
+        if script.count("\nfile ") == 0:
+            raise HTTPException(404, "no recordings at that time")
+        tmpdir = Path(tempfile.mkdtemp(prefix="pb-"))
+        (tmpdir / "list.ffconcat").write_text(script)
+        proc = await asyncio.create_subprocess_exec(
+            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0",
+            "-f", "concat", "-i", str(tmpdir / "list.ffconcat"), "-t", str(dur),
+            "-vf", "scale=-2:720", "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+        )
+
+        async def stream():
+            try:
+                while True:
+                    chunk = await proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                if proc.returncode is None:
+                    proc.kill()
+                    await proc.wait()
+                _rmtree(tmpdir)
+
+        return StreamingResponse(stream(), media_type="video/mp4",
+                                 headers={"Cache-Control": "no-store"})
 
     @app.get("/recordings/{cam_id}/{name}")
     async def recording(cam_id: str, name: str):
