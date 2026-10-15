@@ -211,12 +211,30 @@ function applyXform(video) {
   const s = x.zoom * rotFit(video);
   video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${s}) rotate(${x.rot}deg)`;
 }
-function zoomBy(video, factor) {
+// Keep the zoomed image covering the frame: pan can't push an edge past the frame edge.
+function clampPan(video) {
+  const x = video._xf, wrap = video.closest('.vwrap, #playerWrap');
+  if (!wrap) return;
+  const mx = (x.zoom - 1) * wrap.clientWidth / 2, my = (x.zoom - 1) * wrap.clientHeight / 2;
+  x.px = clamp(x.px, -mx, mx); x.py = clamp(x.py, -my, my);
+}
+function setZoom(video, z) {
   const x = video._xf, prev = x.zoom;
-  x.zoom = clamp(x.zoom * factor, 1, 6);
-  if (x.zoom === 1) { x.px = 0; x.py = 0; }
-  else { const k = x.zoom / prev; x.px *= k; x.py *= k; }
+  z = clamp(z, 1, 6);
+  if (z < 1.01) z = 1;  // snap: float drift (e.g. 1.0000000000000002) must not leave it "zoomed"
+  x.zoom = z;
+  if (z === 1) { x.px = 0; x.py = 0; }
+  else { const k = z / prev; x.px *= k; x.py *= k; clampPan(video); }
   applyXform(video);
+}
+function zoomBy(video, factor) { setZoom(video, video._xf.zoom * factor); }  // wheel / pinch
+// Buttons step through fixed levels so zooming out always lands exactly on 1x.
+const ZOOM_LEVELS = [1, 1.5, 2, 3, 4, 6];
+function zoomStep(video, dir) {
+  const z = video._xf.zoom;
+  const next = dir > 0 ? (ZOOM_LEVELS.find(l => l > z + 0.01) ?? 6)
+                       : ([...ZOOM_LEVELS].reverse().find(l => l < z - 0.01) ?? 1);
+  setZoom(video, next);
 }
 function makeInteractive(video, id) {
   const x = video._xf = { zoom: 1, px: 0, py: 0, rot: id ? getRot(id) : 0 };
@@ -246,18 +264,25 @@ function makeInteractive(video, id) {
       e.preventDefault();
       const [a, b] = [...pts.values()];
       const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-      x.zoom = clamp(pinch.zoom * (d / pinch.d), 1, 6);
-      if (x.zoom === 1) { x.px = 0; x.py = 0; }
-      applyXform(video);
+      setZoom(video, pinch.zoom * (d / pinch.d));
     } else if (drag) {
       e.preventDefault();
       x.px = drag.px + (e.clientX - drag.sx); x.py = drag.py + (e.clientY - drag.sy);
+      clampPan(video);
       applyXform(video);
     }
   });
-  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (pts.size === 0) drag = null; };
+  // Release capture explicitly when a gesture ends; otherwise a still-captured touch
+  // pointer swallows the next tap (e.g. the zoom-out button right after a pan).
+  const up = e => {
+    pts.delete(e.pointerId);
+    if (video.hasPointerCapture && video.hasPointerCapture(e.pointerId)) video.releasePointerCapture(e.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (pts.size === 0) drag = null;
+  };
   video.addEventListener('pointerup', up);
   video.addEventListener('pointercancel', up);
+  video.addEventListener('lostpointercapture', e => { pts.delete(e.pointerId); if (pts.size === 0) { drag = null; pinch = null; } });
   return x;
 }
 // Live view rotation: rotate the tile via CSS and persist the angle to the server
@@ -268,6 +293,41 @@ function rotateLive(video, id) {
   const x = video._xf; x.rot = deg; x.zoom = 1; x.px = 0; x.py = 0;
   applyXform(video);
 }
+
+// Overlay controls act on the tap itself. Chrome drops the 'click' of the first tap after
+// a touch drag (e.g. pan, then tap zoom-out did nothing), so touch/pen use pointerup;
+// mouse and keyboard still use click, de-duplicated against the preceding tap.
+function onTap(el, fn) {
+  el.addEventListener('pointerup', e => {
+    if (e.pointerType === 'mouse') return;
+    e.preventDefault(); el._tapAt = Date.now(); fn();
+  });
+  el.addEventListener('click', () => { if (Date.now() - (el._tapAt || 0) > 700) fn(); });
+}
+
+// Fullscreen is a TOGGLE: the same button (and double-click) exits again. Previously it
+// only ever called requestFullscreen, so inside fullscreen it did nothing (no way back
+// on phones, which have no Esc key).
+const FS_ENTER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
+const FS_EXIT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>';
+const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+function toggleFullscreen(wrap, video) {
+  if (fsElement()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+  if (wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
+  else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
+  else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();  // iPhone: native player with its own Done button
+}
+function syncFullscreenButtons() {
+  const cur = fsElement();
+  document.querySelectorAll('.iconbtn.fs').forEach(b => {
+    const on = !!(cur && cur.contains(b));
+    b.innerHTML = on ? FS_EXIT : FS_ENTER;
+    b.title = on ? 'Exit fullscreen' : 'Fullscreen';
+    b.setAttribute('aria-label', b.title);
+  });
+}
+document.addEventListener('fullscreenchange', syncFullscreenButtons);
+document.addEventListener('webkitfullscreenchange', syncFullscreenButtons);
 
 function renderLive() {
   hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = [];
@@ -280,18 +340,18 @@ function renderLive() {
         <button class="iconbtn zin" title="Zoom in">+</button>
         <button class="iconbtn zout" title="Zoom out">−</button>
         <button class="iconbtn rot" title="Rotate">⟳</button>
-        <button class="iconbtn fs" title="Fullscreen">⛶</button></div>
+        <button class="iconbtn fs" title="Fullscreen" aria-label="Fullscreen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button></div>
       <span class="zhint">scroll to zoom · drag to pan</span></div>
       <div class="bar"><span class="dot"></span><b></b><span class="err"></span></div>`;
     t.querySelector('b').textContent = c.name;
     const v = t.querySelector('video');
     makeInteractive(v, c.id);
-    t.querySelector('.snap').onclick = () => openSnapshot(c.id, c.name);
-    t.querySelector('.zin').onclick = () => zoomBy(v, 1.4);
-    t.querySelector('.zout').onclick = () => zoomBy(v, 1 / 1.4);
-    t.querySelector('.rot').onclick = () => rotateLive(v, c.id);
-    t.querySelector('.fs').onclick = () => (t.querySelector('.vwrap').requestFullscreen?.());
-    v.ondblclick = () => t.querySelector('.vwrap').requestFullscreen?.();
+    onTap(t.querySelector('.snap'), () => openSnapshot(c.id, c.name));
+    onTap(t.querySelector('.zin'), () => zoomStep(v, 1));
+    onTap(t.querySelector('.zout'), () => zoomStep(v, -1));
+    onTap(t.querySelector('.rot'), () => rotateLive(v, c.id));
+    onTap(t.querySelector('.fs'), () => toggleFullscreen(t.querySelector('.vwrap'), v));
+    v.ondblclick = () => toggleFullscreen(t.querySelector('.vwrap'), v);
     root.appendChild(t);
     hlsPlayers.push(attach(v, c.live));
   }
@@ -442,8 +502,8 @@ $('#rotPlay').onclick = async () => {
   await loadDay();           // refresh thumbnails at the new rotation
   if (t) playAt(t);          // reload the playback stream at the new rotation
 };
-$('#zinPlay').onclick = () => zoomBy($('#player'), 1.4);
-$('#zoutPlay').onclick = () => zoomBy($('#player'), 1 / 1.4);
+onTap($('#zinPlay'), () => zoomStep($('#player'), 1));
+onTap($('#zoutPlay'), () => zoomStep($('#player'), -1));
 // Vertical rail: click or drag to scrub; preview while dragging, commit on release.
 (function () {
   const rail = $('#rail');

@@ -48,6 +48,15 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     app = FastAPI(title="homenvr", lifespan=lifespan)
     app.state.cfg, app.state.storage, app.state.supervisor = cfg, storage, sup
 
+    @app.middleware("http")
+    async def no_cache_html(request: Request, call_next):
+        # Without this, browsers heuristically cache index.html and keep running an old UI
+        # after an upgrade. no-cache still allows cheap ETag revalidation (304).
+        resp = await call_next(request)
+        if request.url.path == "/" or request.url.path.endswith(".html"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     if cfg.ui_username:
         expected = "Basic " + base64.b64encode(f"{cfg.ui_username}:{cfg.ui_password}".encode()).decode()
 

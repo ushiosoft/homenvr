@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      TZ: ${TZ:-America/Toronto}
+      TZ: ${TZ:-UTC}
     ports:
       - "8971:8080"
     volumes:
