@@ -139,6 +139,12 @@ async def snapshot_camera(cam, cfg, width: int = 640) -> bytes:
         return await snapshot(cam.live_url, cfg.rtsp_transport, width)
 
 
+async def thumbnail(path, offset: float, width: int = 320, timeout: float = 15) -> bytes:
+    """Extract a JPEG from a recording file at `offset` seconds (input-seek to the
+    nearest keyframe — fast). Used for playback event thumbnails."""
+    return await _ffmpeg_jpeg(["-ss", f"{max(0.0, offset):.3f}", "-i", str(path)], width, timeout)
+
+
 def _video_tag(codec: str | None) -> list[str]:
     # hvc1 (parameter sets in the sample entry) is what Safari/Chrome expect for HEVC in MP4.
     return ["-tag:v", "hvc1"] if codec == "hevc" else []
@@ -286,6 +292,7 @@ class Supervisor:
         self.events = None  # EventStore, set in start() if motion enabled
         self.watchdog = None  # set in _watchdog_loop
         self._motion_push_at: dict[str, float] = {}
+        self._motion_pushing: set[str] = set()
         self._tasks: list[asyncio.Task] = []
 
     def reload_notifier(self) -> None:
@@ -295,17 +302,25 @@ class Supervisor:
             self.watchdog.notifier = make_notifier(self.cfg.alerts)
 
     async def _motion_alert(self, cam_id: str, ts: float, score: float) -> None:
-        """On motion: capture a snapshot and push a notification (throttled per camera)."""
+        """On every motion event: capture a snapshot and push a notification.
+
+        Event cadence is already bounded by motion.min_gap_seconds. An optional
+        motion_push_cooldown (default 0 = every event) can throttle further. An
+        in-flight guard prevents pushes from piling up if a capture is slow.
+        """
         a = self.cfg.alerts
         if not a.motion_push or a.notifier == "none":
             return
         last = self._motion_push_at.get(cam_id, 0.0)
-        if ts - last < a.motion_push_cooldown:
+        if a.motion_push_cooldown and ts - last < a.motion_push_cooldown:
             return
-        self._motion_push_at[cam_id] = ts
+        if cam_id in self._motion_pushing:  # a push for this camera is still running
+            return
         cam = self.cfg.camera(cam_id)
         if cam is None:
             return
+        self._motion_push_at[cam_id] = ts
+        self._motion_pushing.add(cam_id)
         try:
             from .alerts import make_notifier
             img = await snapshot_camera(cam, self.cfg)
@@ -316,6 +331,8 @@ class Supervisor:
             log.info("[%s] motion push sent", cam_id)
         except Exception as e:
             log.warning("[%s] motion push failed: %s", cam_id, redact(str(e)))
+        finally:
+            self._motion_pushing.discard(cam_id)
 
     async def start(self) -> None:
         if not shutil.which(FFMPEG):

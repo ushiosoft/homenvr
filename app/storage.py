@@ -114,6 +114,14 @@ class Storage:
             last = stamps[-1]
         return (stamps[0], last)
 
+    def segment_at(self, camera: str, ts: float) -> tuple[Path | None, float]:
+        """Find the segment (active or grace) covering `ts`; return (path, offset_seconds)."""
+        for base in (self.root, self.root / GRACE_DIR):
+            for seg in self.segments(camera, ts - 1, ts + 1, root=base):
+                if seg.start <= ts < seg.end:
+                    return seg.path, max(0.0, ts - seg.start)
+        return None, 0.0
+
     def cameras_on_disk(self) -> list[str]:
         if not self.root.is_dir():
             return []

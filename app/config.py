@@ -70,7 +70,7 @@ class Alerts:
     stale_segment_seconds: int = 180  # recorder "running" but no new data this long
     check_interval: int = 60
     motion_push: bool = False  # push a snapshot notification on motion
-    motion_push_cooldown: int = 300  # min seconds between motion pushes per camera
+    motion_push_cooldown: int = 0  # min seconds between motion pushes per camera (0 = every event)
 
 
 @dataclass
@@ -176,7 +176,7 @@ def parse(raw: dict) -> Config:
             stale_segment_seconds=int(a.get("stale_segment_seconds", 180)),
             check_interval=int(a.get("check_interval", 60)),
             motion_push=bool(a.get("motion_push", False)),
-            motion_push_cooldown=int(a.get("motion_push_cooldown", 300)),
+            motion_push_cooldown=int(a.get("motion_push_cooldown", 0)),
         ),
         motion=Motion(
             enabled=bool(m.get("enabled", False)),

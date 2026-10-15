@@ -248,6 +248,38 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
             raise HTTPException(502, f"snapshot failed: {e}")
         return Response(img, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
+    @app.post("/api/cameras/{cam_id}/snapshot/push")
+    async def push_snapshot(cam_id: str):
+        cam = camera_or_404(cam_id)
+        from .alerts import NullNotifier, make_notifier
+        from .recorder import snapshot_camera
+        n = make_notifier(cfg.alerts)
+        if isinstance(n, NullNotifier):
+            raise HTTPException(400, "no notifier configured — set one in Settings first")
+        try:
+            img = await snapshot_camera(cam, cfg)
+            when = time.strftime("%H:%M:%S", time.localtime())
+            await asyncio.to_thread(n.send_image, f"Snapshot — {cam.name}",
+                                    f"Manual snapshot at {when}", img, f"{cam_id}-{int(time.time())}.jpg")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(502, f"push failed: {e}")
+        return {"pushed": True, "notifier": cfg.alerts.notifier}
+
+    @app.get("/api/cameras/{cam_id}/thumb")
+    async def thumb(cam_id: str, ts: float = Query(...)):
+        camera_or_404(cam_id)
+        from .recorder import thumbnail
+        path, offset = await asyncio.to_thread(storage.segment_at, cam_id, ts)
+        if not path:
+            raise HTTPException(404, "no recording at that time")
+        try:
+            img = await thumbnail(path, offset)
+        except Exception as e:
+            raise HTTPException(502, f"thumbnail failed: {e}")
+        return Response(img, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
     @app.get("/live/{cam_id}/{name}")
     async def live(cam_id: str, name: str):
         camera_or_404(cam_id)

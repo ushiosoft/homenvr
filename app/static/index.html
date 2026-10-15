@@ -53,6 +53,18 @@
   #timeline .evt:hover { height:15px; background:#fbbf24; }
   #timeline .tick { position:absolute; bottom:0; font-size:10px; color:var(--muted); transform:translateX(-50%); }
   #now { color:var(--muted); font-variant-numeric:tabular-nums; }
+  #events { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin-top:12px; }
+  .evhdr { grid-column:1/-1; color:var(--muted); font-size:12px; margin:6px 0 2px; }
+  .evcard { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; cursor:pointer; }
+  .evcard img { width:100%; aspect-ratio:16/9; object-fit:cover; background:#0b0d10; display:block; }
+  .evcard .t { padding:4px 8px; font-size:12px; font-variant-numeric:tabular-nums; display:flex; justify-content:space-between; }
+  .evcard .t .sc { color:var(--muted); }
+  .evcard:hover, .evcard.on { border-color:var(--accent); }
+  #modal { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.82); padding:16px; }
+  #modal .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; max-width:min(96vw,900px); }
+  #modal img { max-width:100%; max-height:70vh; border-radius:6px; display:block; background:#000; }
+  #modal .mbar { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
+  #modal .mspin { min-height:200px; display:flex; align-items:center; justify-content:center; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; max-width:680px; }
   .card h3 { margin:0 0 4px; font-size:14px; }
   .card p.hint { margin:0 0 12px; color:var(--muted); font-size:12px; }
@@ -97,6 +109,7 @@
     </div>
     <div id="playerWrap"><video id="player" controls playsinline muted></video></div>
     <div id="timeline"></div>
+    <div id="events"></div>
   </section>
   <section id="saved" class="hidden"></section>
   <section id="settings" class="hidden"></section>
@@ -235,6 +248,7 @@ function renderLive() {
     const t = document.createElement('div'); t.className = 'tile';
     t.innerHTML = `<div class="vwrap"><video muted autoplay playsinline></video>
       <div class="ctls">
+        <button class="iconbtn snap" title="Snapshot">▣</button>
         <button class="iconbtn zin" title="Zoom in">+</button>
         <button class="iconbtn zout" title="Zoom out">−</button>
         <button class="iconbtn rot" title="Rotate">⟳</button>
@@ -244,6 +258,7 @@ function renderLive() {
     t.querySelector('b').textContent = c.name;
     const v = t.querySelector('video');
     makeInteractive(v, c.id);
+    t.querySelector('.snap').onclick = () => openSnapshot(c.id, c.name);
     t.querySelector('.zin').onclick = () => zoomBy(v, 1.4);
     t.querySelector('.zout').onclick = () => zoomBy(v, 1 / 1.4);
     t.querySelector('.rot').onclick = () => rotate(v, c.id);
@@ -279,6 +294,44 @@ async function loadDay() {
   try { events = await api(`api/cameras/${cam}/events?start=${dayStart}&end=${dayStart + DAY}`); }
   catch { events = []; }
   drawTimeline();
+  renderEvents();
+}
+
+let _thumbObserver = null;
+function renderEvents() {
+  const root = $('#events'); root.innerHTML = '';
+  const cam = $('#cam').value;
+  if (!events.length) {
+    root.innerHTML = '<p class="hint" style="grid-column:1/-1">No motion events this day. Pick a point on the bar above to play, or switch day.</p>';
+    return;
+  }
+  if (_thumbObserver) _thumbObserver.disconnect();
+  _thumbObserver = new IntersectionObserver((entries, obs) => {
+    for (const en of entries) if (en.isIntersecting) {
+      const img = en.target; img.src = img.dataset.src; obs.unobserve(img);
+    }
+  }, { rootMargin: '200px' });
+
+  let lastHour = -1;
+  for (const e of events) {
+    const d = new Date(e.ts * 1000), hr = d.getHours();
+    if (hr !== lastHour) {
+      lastHour = hr;
+      const h = document.createElement('div'); h.className = 'evhdr'; h.textContent = `${pad(hr)}:00`;
+      root.appendChild(h);
+    }
+    const card = document.createElement('div'); card.className = 'evcard';
+    card.innerHTML = `<img alt="" data-src="api/cameras/${cam}/thumb?ts=${e.ts}" loading="lazy">
+      <div class="t"><span>${fmtTime(e.ts)}</span><span class="sc">motion</span></div>`;
+    card.onclick = () => {
+      document.querySelectorAll('.evcard.on').forEach(x => x.classList.remove('on'));
+      card.classList.add('on');
+      playAt(e.ts);
+      $('#playerWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    _thumbObserver.observe(card.querySelector('img'));
+    root.appendChild(card);
+  }
 }
 function drawTimeline() {
   const tl = $('#timeline'); tl.innerHTML = '';
@@ -408,6 +461,40 @@ $('#tab-play').onclick = () => tab('play');
 $('#tab-saved').onclick = () => tab('saved');
 $('#tab-settings').onclick = () => tab('settings');
 
+// ---- live snapshot modal ----
+async function openSnapshot(camId, camName) {
+  const m = document.createElement('div'); m.id = 'modal';
+  m.innerHTML = `<div class="box"><div class="mspin"><div class="spinner"></div></div></div>`;
+  m.onclick = e => { if (e.target === m) m.remove(); };
+  document.body.appendChild(m);
+  let blobUrl = null;
+  try {
+    const r = await fetch(`api/cameras/${camId}/snapshot`);
+    if (!r.ok) throw new Error(r.status);
+    blobUrl = URL.createObjectURL(await r.blob());
+    m.querySelector('.box').innerHTML = `
+      <img src="${blobUrl}" alt="snapshot">
+      <div class="mbar">
+        <b style="flex:1">${esc(camName)} · ${new Date().toLocaleTimeString()}</b>
+        <a class="btn" href="${blobUrl}" download="${camId}-snapshot.jpg">⬇ Download</a>
+        <button class="btn" id="m_push">▲ Push to alert</button>
+        <button class="btn" id="m_close">Close</button>
+        <span class="saved" id="m_msg"></span></div>`;
+    m.querySelector('#m_close').onclick = () => m.remove();
+    m.querySelector('#m_push').onclick = async () => {
+      const msg = m.querySelector('#m_msg'); msg.textContent = 'sending…'; msg.style.color = '';
+      try {
+        const pr = await fetch(`api/cameras/${camId}/snapshot/push`, { method: 'POST' });
+        if (!pr.ok) throw new Error((await pr.text()).slice(0, 140));
+        const j = await pr.json(); msg.textContent = '✓ pushed via ' + j.notifier;
+      } catch (e) { msg.textContent = 'failed: ' + e.message; msg.style.color = 'var(--bad)'; }
+    };
+  } catch (e) {
+    m.querySelector('.box').innerHTML = `<p class="hint">Snapshot failed (${e.message}).</p><div class="mbar"><button class="btn" id="m_close">Close</button></div>`;
+    m.querySelector('#m_close').onclick = () => m.remove();
+  }
+}
+
 // ---- settings page ----
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 async function renderSettings() {
@@ -428,7 +515,7 @@ async function renderSettings() {
       <div class="frow nf nf-telegram"><label>Telegram chat ID</label><input id="s_tg_chat" value="${esc(a.telegram.chat_id)}" placeholder="e.g. 123456789"></div>
       <div class="frow"><label>Alert if stalled (sec)</label><input id="s_stale" type="number" min="10" value="${a.stale_segment_seconds}"></div>
       <div class="frow"><label>Push motion snapshots</label><input id="s_mpush" type="checkbox" ${a.motion_push ? 'checked' : ''} style="flex:0;width:auto"><span class="hint">send a photo notification when motion is detected</span></div>
-      <div class="frow"><label>Motion push cooldown (sec)</label><input id="s_mcool" type="number" min="10" value="${a.motion_push_cooldown}"></div>
+      <div class="frow"><label>Motion push cooldown (sec)</label><input id="s_mcool" type="number" min="0" value="${a.motion_push_cooldown}"><span class="hint">0 = push every detected event</span></div>
       <div class="frow"><button class="btn" id="s_save">Save alerts</button><button class="btn" id="s_test">Send test alert</button><span class="saved" id="s_amsg"></span></div>
     </div>
     <div class="card">

@@ -41,4 +41,4 @@ alerts:                # notify when a camera stops recording / disk fills
   # smtp: {host: smtp.example.com, port: 587, user: you, password: pw, to: you@example.com}
   stale_segment_seconds: 180   # alert if recording but no new data this long
   motion_push: false           # push a camera snapshot when motion is detected
-  motion_push_cooldown: 300    # min seconds between motion pushes per camera
+  motion_push_cooldown: 0      # seconds between motion pushes per camera (0 = every event)
