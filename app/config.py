@@ -80,6 +80,8 @@ class Motion:
     sensitivity: float = 4.0  # frame-difference brightness threshold (0-255); higher = less sensitive
     min_gap_seconds: float = 8.0  # merge detections closer than this into one event
     cooldown_seconds: float = 3.0
+    detect: bool = True  # label events person/vehicle via on-server object detection
+    detect_confidence: float = 0.45
 
 
 @dataclass
@@ -183,6 +185,8 @@ def parse(raw: dict) -> Config:
             sensitivity=float(m.get("sensitivity", 4.0)),
             min_gap_seconds=float(m.get("min_gap_seconds", 8.0)),
             cooldown_seconds=float(m.get("cooldown_seconds", 3.0)),
+            detect=bool(m.get("detect", True)),
+            detect_confidence=float(m.get("detect_confidence", 0.45)),
         ),
         events_db=Path(raw.get("events_db", str(storage_dir / "events.db"))),
     )

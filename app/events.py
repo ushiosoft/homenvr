@@ -31,9 +31,14 @@ class EventStore:
                 "camera TEXT NOT NULL,"
                 "ts REAL NOT NULL,"
                 "type TEXT NOT NULL DEFAULT 'motion',"
-                "score REAL DEFAULT 0)"
+                "score REAL DEFAULT 0,"
+                "label TEXT DEFAULT '')"
             )
             c.execute("CREATE INDEX IF NOT EXISTS idx_cam_ts ON events(camera, ts)")
+            # Migrate older DBs that predate the label column.
+            cols = {r[1] for r in c.execute("PRAGMA table_info(events)").fetchall()}
+            if "label" not in cols:
+                c.execute("ALTER TABLE events ADD COLUMN label TEXT DEFAULT ''")
 
     def add(self, camera: str, ts: float, type: str = "motion", score: float = 0.0) -> int:
         with self._conn() as c:
@@ -41,13 +46,17 @@ class EventStore:
                             (camera, ts, type, score))
             return cur.lastrowid
 
+    def set_label(self, event_id: int, label: str) -> None:
+        with self._conn() as c:
+            c.execute("UPDATE events SET label=? WHERE id=?", (label, event_id))
+
     def query(self, camera: str, start: float, end: float, limit: int = 5000) -> list[dict]:
         with self._conn() as c:
             rows = c.execute(
-                "SELECT ts, type, score FROM events WHERE camera=? AND ts>=? AND ts<? "
+                "SELECT ts, type, score, label FROM events WHERE camera=? AND ts>=? AND ts<? "
                 "ORDER BY ts LIMIT ?", (camera, start, end, limit),
             ).fetchall()
-        return [{"ts": r[0], "type": r[1], "score": r[2]} for r in rows]
+        return [{"ts": r[0], "type": r[1], "score": r[2], "label": r[3] or ""} for r in rows]
 
     def latest(self, camera: str) -> float | None:
         with self._conn() as c:

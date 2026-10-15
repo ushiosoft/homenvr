@@ -57,11 +57,11 @@ class MotionDetector:
         if now - self.last_event_ts < self.cfg.motion.min_gap_seconds:
             return False
         self.last_event_ts = now
-        self.store.add(self.cam.id, now, "motion", score)
+        eid = self.store.add(self.cam.id, now, "motion", score)
         self.events += 1
         if self.on_event and self._loop:
             self._loop.call_soon_threadsafe(
-                lambda: asyncio.ensure_future(self.on_event(self.cam.id, now, score)))
+                lambda: asyncio.ensure_future(self.on_event(self.cam.id, now, score, eid)))
         return True
 
     async def run(self) -> None:

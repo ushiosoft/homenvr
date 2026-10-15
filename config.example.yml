@@ -32,6 +32,8 @@ motion:                # server-side motion detection -> timeline markers (no NV
   enabled: true
   sensitivity: 4.0     # frame-difference brightness threshold (0-255); lower = more sensitive
   min_gap_seconds: 8   # merge a burst of motion into one event
+  detect: true         # label events person/vehicle (on-server object detection)
+  detect_confidence: 0.45
 
 alerts:                # notify when a camera stops recording / disk fills
   notifier: none       # none | ntfy | webhook | smtp

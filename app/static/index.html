@@ -57,9 +57,16 @@
   .evhdr { grid-column:1/-1; color:var(--muted); font-size:12px; margin:6px 0 2px; }
   .evcard { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; cursor:pointer; }
   .evcard img { width:100%; aspect-ratio:16/9; object-fit:cover; background:#0b0d10; display:block; }
-  .evcard .t { padding:4px 8px; font-size:12px; font-variant-numeric:tabular-nums; display:flex; justify-content:space-between; }
-  .evcard .t .sc { color:var(--muted); }
+  .evcard .t { padding:4px 8px; font-size:12px; font-variant-numeric:tabular-nums; display:flex; justify-content:space-between; align-items:center; gap:6px; }
   .evcard:hover, .evcard.on { border-color:var(--accent); }
+  .chip { font-size:11px; padding:1px 7px; border-radius:10px; white-space:nowrap; }
+  .chip.person { background:rgba(22,163,74,.22); color:#22c55e; }
+  .chip.vehicle { background:rgba(37,99,235,.22); color:#60a5fa; }
+  .chip.motion { background:rgba(148,163,184,.18); color:var(--muted); }
+  .evfilter { grid-column:1/-1; display:flex; gap:6px; align-items:center; margin-bottom:2px; }
+  .evfilter button { background:var(--panel); border:1px solid var(--line); color:var(--muted); border-radius:14px; padding:4px 12px; cursor:pointer; font:inherit; font-size:12px; }
+  .evfilter button.on { color:var(--fg); border-color:var(--accent); }
+  #evcount { margin-left:auto; color:var(--muted); font-size:12px; }
   #modal { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.82); padding:16px; }
   #modal .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; max-width:min(96vw,900px); }
   #modal img { max-width:100%; max-height:70vh; border-radius:6px; display:block; background:#000; }
@@ -297,32 +304,48 @@ async function loadDay() {
   renderEvents();
 }
 
-let _thumbObserver = null;
+let _thumbObserver = null, evFilter = 'all';
+const evCats = e => (e.label ? e.label.split(',').filter(Boolean) : []);
 function renderEvents() {
   const root = $('#events'); root.innerHTML = '';
   const cam = $('#cam').value;
-  if (!events.length) {
-    root.innerHTML = '<p class="hint" style="grid-column:1/-1">No motion events this day. Pick a point on the bar above to play, or switch day.</p>';
-    return;
+  const counts = { all: events.length, person: 0, vehicle: 0 };
+  for (const e of events) { if (evCats(e).includes('person')) counts.person++; if (evCats(e).includes('vehicle')) counts.vehicle++; }
+
+  const bar = document.createElement('div'); bar.className = 'evfilter';
+  const mk = (key, text) => `<button data-f="${key}" class="${evFilter === key ? 'on' : ''}">${text}</button>`;
+  bar.innerHTML = mk('all', `All (${counts.all})`) + mk('person', `🚶 People (${counts.person})`) +
+                  mk('vehicle', `🚗 Vehicles (${counts.vehicle})`) + `<span id="evcount"></span>`;
+  bar.querySelectorAll('button').forEach(b => b.onclick = () => { evFilter = b.dataset.f; renderEvents(); });
+  root.appendChild(bar);
+
+  const shown = events.filter(e => evFilter === 'all' || evCats(e).includes(evFilter));
+  $('#evcount') && ($('#evcount').textContent = `${shown.length} shown`);
+  if (!shown.length) {
+    const p = document.createElement('p'); p.className = 'hint'; p.style.gridColumn = '1/-1';
+    p.textContent = events.length ? 'No events match this filter.' : 'No motion events this day.';
+    root.appendChild(p); return;
   }
   if (_thumbObserver) _thumbObserver.disconnect();
   _thumbObserver = new IntersectionObserver((entries, obs) => {
-    for (const en of entries) if (en.isIntersecting) {
-      const img = en.target; img.src = img.dataset.src; obs.unobserve(img);
-    }
+    for (const en of entries) if (en.isIntersecting) { en.target.src = en.target.dataset.src; obs.unobserve(en.target); }
   }, { rootMargin: '200px' });
 
   let lastHour = -1;
-  for (const e of events) {
-    const d = new Date(e.ts * 1000), hr = d.getHours();
+  for (const e of shown) {
+    const hr = new Date(e.ts * 1000).getHours();
     if (hr !== lastHour) {
       lastHour = hr;
       const h = document.createElement('div'); h.className = 'evhdr'; h.textContent = `${pad(hr)}:00`;
       root.appendChild(h);
     }
+    const cats = evCats(e);
+    const chip = cats.includes('person') ? '<span class="chip person">person</span>'
+      : cats.includes('vehicle') ? '<span class="chip vehicle">vehicle</span>'
+      : '<span class="chip motion">motion</span>';
     const card = document.createElement('div'); card.className = 'evcard';
     card.innerHTML = `<img alt="" data-src="api/cameras/${cam}/thumb?ts=${e.ts}" loading="lazy">
-      <div class="t"><span>${fmtTime(e.ts)}</span><span class="sc">motion</span></div>`;
+      <div class="t"><span>${fmtTime(e.ts)}</span>${chip}</div>`;
     card.onclick = () => {
       document.querySelectorAll('.evcard.on').forEach(x => x.classList.remove('on'));
       card.classList.add('on');
@@ -527,6 +550,7 @@ async function renderSettings() {
       <p class="hint">Marks activity on the playback timeline. ${m.enabled ? '' : '<b>Disabled</b> — enable in config.yml and restart.'} Sensitivity is lower = more sensitive.</p>
       <div class="frow"><label>Sensitivity</label><input id="s_sens" type="number" step="0.5" min="0.1" value="${m.sensitivity}"></div>
       <div class="frow"><label>Merge gap (sec)</label><input id="s_gap" type="number" min="1" value="${m.min_gap_seconds}"></div>
+      <div class="frow"><label>Label person/vehicle</label><input id="s_detect" type="checkbox" ${m.detect ? 'checked' : ''} style="flex:0;width:auto"><span class="hint">on-server object detection tags each event</span></div>
       <div class="frow"><button class="btn" id="s_savem">Save motion</button><span class="saved" id="s_mmsg"></span></div>
     </div>
     <div class="card">
@@ -565,7 +589,7 @@ async function renderSettings() {
     } catch (e) { el.textContent = 'failed: ' + e.message; el.style.color = 'var(--bad)'; }
     setTimeout(() => { el.textContent = ''; }, 6000);
   };
-  $('#s_savem').onclick = () => save({ motion: { sensitivity: +$('#s_sens').value, min_gap_seconds: +$('#s_gap').value } }, $('#s_mmsg'));
+  $('#s_savem').onclick = () => save({ motion: { sensitivity: +$('#s_sens').value, min_gap_seconds: +$('#s_gap').value, detect: $('#s_detect').checked } }, $('#s_mmsg'));
   $('#s_saver').onclick = () => save({ retention: { max_days: +$('#s_days').value, max_gb: +$('#s_maxgb').value, min_free_gb: +$('#s_free').value } }, $('#s_rmsg'));
 }
 

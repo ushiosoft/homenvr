@@ -290,6 +290,7 @@ class Supervisor:
         self.workers: dict[tuple[str, str], Worker] = {}
         self.motion: dict[str, object] = {}
         self.events = None  # EventStore, set in start() if motion enabled
+        self.detector = None  # ObjectDetector, set in start() if detection enabled
         self.watchdog = None  # set in _watchdog_loop
         self._motion_push_at: dict[str, float] = {}
         self._motion_pushing: set[str] = set()
@@ -301,36 +302,44 @@ class Supervisor:
         if self.watchdog is not None:
             self.watchdog.notifier = make_notifier(self.cfg.alerts)
 
-    async def _motion_alert(self, cam_id: str, ts: float, score: float) -> None:
-        """On every motion event: capture a snapshot and push a notification.
+    async def _motion_alert(self, cam_id: str, ts: float, score: float, eid: int | None = None) -> None:
+        """On every motion event: run object detection to label it, and (if enabled)
+        push a snapshot notification. One snapshot is captured and reused for both.
 
-        Event cadence is already bounded by motion.min_gap_seconds. An optional
-        motion_push_cooldown (default 0 = every event) can throttle further. An
-        in-flight guard prevents pushes from piling up if a capture is slow.
+        Event cadence is bounded by motion.min_gap_seconds; motion_push_cooldown
+        (default 0 = every event) can throttle pushes; an in-flight guard per camera
+        prevents pile-ups.
         """
         a = self.cfg.alerts
-        if not a.motion_push or a.notifier == "none":
-            return
-        last = self._motion_push_at.get(cam_id, 0.0)
-        if a.motion_push_cooldown and ts - last < a.motion_push_cooldown:
-            return
-        if cam_id in self._motion_pushing:  # a push for this camera is still running
-            return
         cam = self.cfg.camera(cam_id)
         if cam is None:
             return
-        self._motion_push_at[cam_id] = ts
+        want_detect = (self.cfg.motion.detect and self.detector is not None
+                       and self.detector.ok and eid is not None)
+        push_ready = a.motion_push and a.notifier != "none"
+        push_now = push_ready and not (a.motion_push_cooldown and ts - self._motion_push_at.get(cam_id, 0.0) < a.motion_push_cooldown)
+        if not (want_detect or push_now):
+            return
+        if cam_id in self._motion_pushing:
+            return
         self._motion_pushing.add(cam_id)
         try:
-            from .alerts import make_notifier
             img = await snapshot_camera(cam, self.cfg)
-            when = time.strftime("%H:%M:%S", time.localtime(ts))
-            notifier = make_notifier(a)
-            await asyncio.to_thread(notifier.send_image, f"Motion — {cam.name}",
-                                    f"Detected at {when}", img, f"{cam_id}-{int(ts)}.jpg")
-            log.info("[%s] motion push sent", cam_id)
+            labels: list[str] = []
+            if want_detect:
+                labels = await asyncio.to_thread(self.detector.detect, img)
+                if self.events is not None:
+                    await asyncio.to_thread(self.events.set_label, eid, ",".join(labels))
+            if push_now:
+                self._motion_push_at[cam_id] = ts
+                from .alerts import make_notifier
+                when = time.strftime("%H:%M:%S", time.localtime(ts))
+                what = " + ".join(labels).title() if labels else "Motion"
+                await asyncio.to_thread(make_notifier(a).send_image, f"{what} — {cam.name}",
+                                        f"Detected at {when}", img, f"{cam_id}-{int(ts)}.jpg")
+                log.info("[%s] motion push sent (%s)", cam_id, what)
         except Exception as e:
-            log.warning("[%s] motion push failed: %s", cam_id, redact(str(e)))
+            log.warning("[%s] motion handling failed: %s", cam_id, redact(str(e)))
         finally:
             self._motion_pushing.discard(cam_id)
 
@@ -341,6 +350,9 @@ class Supervisor:
             from .events import EventStore
             from .motion import MotionDetector
             self.events = EventStore(self.cfg.events_db)
+            if self.cfg.motion.detect:
+                from .detect import ObjectDetector
+                self.detector = ObjectDetector(confidence=self.cfg.motion.detect_confidence)
         for cam in self.cfg.cameras:
             if not cam.enabled:
                 continue
