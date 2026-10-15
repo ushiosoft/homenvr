@@ -1,0 +1,18 @@
+# End-to-end test: fake NVR (MediaMTX) + fake cameras + homenvr.
+services:
+  nvr:
+    image: bluenviron/mediamtx:1.9.3
+    volumes: ["./mediamtx.yml:/mediamtx.yml:ro"]
+  cameras:
+    image: rea-toolbox
+    entrypoint: ["sh", "/publish.sh"]
+    volumes: ["./publish.sh:/publish.sh:ro"]
+    depends_on: [nvr]
+    restart: on-failure
+  homenvr:
+    build: ../..
+    environment: {NVR_PASSWORD: "S3cret!pw", TZ: UTC}
+    volumes: ["./config.yml:/config/config.yml:ro", "./recordings:/recordings"]
+    tmpfs: ["/tmp/homenvr-live"]
+    ports: ["18080:8080"]
+    depends_on: [cameras]

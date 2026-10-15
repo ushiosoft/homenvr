@@ -1,0 +1,26 @@
+# homenvr configuration. ${VAR} values come from .env.
+nvr:
+  host: 192.168.1.64
+  port: 554
+  username: admin
+  password: ${NVR_PASSWORD}
+
+cameras:            # channel = NVR channel number (D1, D2, D3...)
+  - {id: cam1, name: Camera 1, channel: 1}
+  - {id: cam2, name: Camera 2, channel: 2}
+  - {id: cam3, name: Camera 3, channel: 3}
+  # Options per camera:
+  #   live_codec: h264   transcode live view if your browser can't play H.265
+  #   audio: none|aac|copy
+  #   record_url / live_url: full rtsp:// URLs to bypass the NVR (e.g. camera moved to home WiFi)
+
+segment_seconds: 600   # 10-minute files
+
+retention:
+  max_days: 60         # delete footage older than this (0 = never)
+  max_gb: 0            # cap total size (0 = no cap)
+  min_free_gb: 20      # always keep this much disk free
+
+ui:
+  username: admin
+  password: ${UI_PASSWORD}

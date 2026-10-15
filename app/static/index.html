@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>homenvr</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --fg:#1b1f24; --muted:#667085; --line:#d0d5dd; --accent:#2563eb; --rec:#16a34a; --bad:#dc2626; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --panel:#181b21; --fg:#e6e8eb; --muted:#98a2b3; --line:#2c313a; --accent:#60a5fa; --rec:#4ade80; --bad:#f87171; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
+  header { display:flex; gap:16px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; }
+  nav button { background:none; border:0; color:var(--muted); font:inherit; padding:6px 10px; cursor:pointer; border-radius:6px; }
+  nav button.on { color:var(--fg); background:var(--bg); }
+  #usage { margin-left:auto; color:var(--muted); font-size:12px; }
+  main { padding:16px; }
+  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fill, minmax(420px, 1fr)); }
+  @media (max-width:480px) { .grid { grid-template-columns:1fr; } }
+  .tile { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .tile video { width:100%; aspect-ratio:16/9; background:#000; display:block; }
+  .tile .bar { display:flex; gap:8px; padding:6px 10px; align-items:center; font-size:12px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); display:inline-block; }
+  .dot.ok { background:var(--rec); }
+  .err { color:var(--bad); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; text-align:right; }
+  .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+  select, input, button.btn { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--fg); }
+  button.btn { cursor:pointer; }
+  #player { width:100%; max-height:70vh; background:#000; border-radius:8px; }
+  #timeline { position:relative; height:44px; background:var(--panel); border:1px solid var(--line); border-radius:6px; margin-top:10px; cursor:pointer; user-select:none; }
+  #timeline .seg { position:absolute; top:8px; bottom:16px; background:var(--accent); opacity:.55; }
+  #timeline .cursor { position:absolute; top:0; bottom:0; width:2px; background:var(--bad); }
+  #timeline .tick { position:absolute; bottom:0; font-size:10px; color:var(--muted); transform:translateX(-50%); }
+  #now { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>homenvr</h1>
+  <nav><button id="tab-live" class="on">Live</button><button id="tab-play">Playback</button></nav>
+  <span id="usage"></span>
+</header>
+<main>
+  <section id="live" class="grid"></section>
+  <section id="play" class="hidden">
+    <div class="controls">
+      <select id="cam"></select>
+      <input id="day" type="date">
+      <button class="btn" id="prev">◀ day</button><button class="btn" id="next">day ▶</button>
+      <span id="now"></span>
+      <span style="flex:1"></span>
+      <label>Export <input id="exlen" type="number" value="60" min="1" max="360" style="width:64px"> s from cursor</label>
+      <button class="btn" id="export">Download clip</button>
+    </div>
+    <video id="player" controls playsinline muted></video>
+    <div id="timeline"></div>
+  </section>
+</main>
+<script src="hls.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const api = p => fetch(p).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+const fmtBytes = b => b > 1e12 ? (b/1e12).toFixed(2)+' TB' : (b/1e9).toFixed(1)+' GB';
+const pad = n => String(n).padStart(2, '0');
+const fmtTime = t => { const d = new Date(t*1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+let cameras = [], hlsPlayers = [];
+
+function attach(video, src) {
+  if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = src; return null; }
+  if (window.Hls && Hls.isSupported()) {
+    const h = new Hls({ liveSyncDurationCount: 2, maxLiveSyncPlaybackRate: 1.5 });
+    h.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setTimeout(() => { h.loadSource(src); h.startLoad(); }, 3000); });
+    h.loadSource(src); h.attachMedia(video); return h;
+  }
+  return null;
+}
+
+async function loadCameras() {
+  cameras = await api('api/cameras');
+  const st = await api('api/status');
+  const r = st.retention;
+  $('#usage').textContent = `${fmtBytes(st.storage.recordings_bytes)} recorded · ${fmtBytes(st.storage.disk_free_bytes)} free · keep ${r.max_days || '∞'} d / ${r.max_gb || '∞'} GB`;
+}
+
+function renderLive() {
+  hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = [];
+  const root = $('#live'); root.innerHTML = '';
+  for (const c of cameras) {
+    const t = document.createElement('div'); t.className = 'tile';
+    t.innerHTML = `<video muted autoplay playsinline></video><div class="bar"><span class="dot"></span><b></b><span class="err"></span></div>`;
+    t.querySelector('b').textContent = c.name;
+    t.querySelector('video').ondblclick = e => e.target.requestFullscreen?.();
+    root.appendChild(t);
+    hlsPlayers.push(attach(t.querySelector('video'), c.live));
+  }
+  updateStatus();
+}
+
+function updateStatus() {
+  document.querySelectorAll('#live .tile').forEach((t, i) => {
+    const s = cameras[i]?.status?.record || {};
+    t.querySelector('.dot').classList.toggle('ok', !!s.running);
+    t.querySelector('.dot').title = s.running ? 'recording' : 'not recording';
+    t.querySelector('.err').textContent = s.running ? (s.stream ? `${s.stream.video} ${s.stream.width}×${s.stream.height}` : '') : (s.last_error || 'starting…');
+  });
+}
+
+// ---- playback ----
+let segs = [], dayStart = 0, current = null;
+const DAY = 86400;
+
+function setDay(d) { // d: Date at local midnight
+  dayStart = d.getTime() / 1000;
+  $('#day').value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  loadDay();
+}
+async function loadDay() {
+  const cam = $('#cam').value;
+  segs = await api(`api/cameras/${cam}/segments?start=${dayStart}&end=${dayStart + DAY}`);
+  drawTimeline();
+}
+function drawTimeline() {
+  const tl = $('#timeline'); tl.innerHTML = '';
+  for (let h = 0; h <= 24; h += 3) {
+    const k = document.createElement('div'); k.className = 'tick'; k.style.left = (h/24*100) + '%'; k.textContent = pad(h)+':00'; tl.appendChild(k);
+  }
+  for (const s of segs) {
+    const el = document.createElement('div'); el.className = 'seg';
+    const a = Math.max(s.start, dayStart), b = Math.min(s.end, dayStart + DAY);
+    el.style.left = ((a - dayStart)/DAY*100) + '%'; el.style.width = Math.max(0.1, (b - a)/DAY*100) + '%';
+    tl.appendChild(el);
+  }
+  const c = document.createElement('div'); c.className = 'cursor'; c.id = 'cursor'; tl.appendChild(c);
+  moveCursor();
+}
+function playheadTime() { return current ? current.start + $('#player').currentTime : null; }
+function moveCursor() {
+  const t = playheadTime(), c = $('#cursor');
+  if (!c) return;
+  c.style.display = t ? '' : 'none';
+  if (t) { c.style.left = ((t - dayStart)/DAY*100) + '%'; $('#now').textContent = new Date(t*1000).toLocaleString(); }
+}
+function playAt(t) {
+  let s = segs.find(x => t >= x.start && t < x.end) || segs.find(x => x.start >= t);
+  if (!s) return;
+  const v = $('#player');
+  const offset = Math.max(0, t - s.start);
+  if (current?.name !== s.name) { current = s; v.src = s.url; v.addEventListener('loadedmetadata', () => { v.currentTime = offset; v.play(); }, { once: true }); }
+  else { v.currentTime = offset; v.play(); }
+}
+$('#player').addEventListener('timeupdate', moveCursor);
+$('#player').addEventListener('ended', () => { // continue into the next segment
+  const i = segs.findIndex(x => x.name === current?.name);
+  if (i >= 0 && segs[i+1]) playAt(segs[i+1].start);
+});
+$('#timeline').addEventListener('click', e => {
+  const r = e.currentTarget.getBoundingClientRect();
+  playAt(dayStart + (e.clientX - r.left) / r.width * DAY);
+});
+$('#cam').onchange = () => { current = null; loadDay(); };
+$('#day').onchange = e => { const [y,m,d] = e.target.value.split('-').map(Number); setDay(new Date(y, m-1, d)); };
+$('#prev').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()-1); setDay(d); };
+$('#next').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()+1); setDay(d); };
+$('#export').onclick = () => {
+  const t = playheadTime(); if (!t) return alert('Click the timeline to pick a start point first.');
+  location.href = `api/cameras/${$('#cam').value}/export?start=${t}&end=${t + Number($('#exlen').value || 60)}`;
+};
+
+function tab(name) {
+  $('#tab-live').classList.toggle('on', name === 'live'); $('#tab-play').classList.toggle('on', name === 'play');
+  $('#live').classList.toggle('hidden', name !== 'live'); $('#play').classList.toggle('hidden', name !== 'play');
+  if (name === 'live') renderLive(); else { hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = []; document.querySelectorAll('#live video').forEach(v => v.removeAttribute('src')); }
+  if (name === 'play' && !dayStart) { const d = new Date(); d.setHours(0,0,0,0); setDay(d); }
+}
+$('#tab-live').onclick = () => tab('live'); $('#tab-play').onclick = () => tab('play');
+
+(async () => {
+  await loadCameras();
+  $('#cam').innerHTML = cameras.map(c => `<option value="${c.id}">${c.name.replace(/</g,'&lt;')}</option>`).join('');
+  tab('live');
+  setInterval(async () => { await loadCameras(); updateStatus(); }, 10000);
+})();
+</script>
+</body>
+</html>

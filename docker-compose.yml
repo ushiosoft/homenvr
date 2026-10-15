@@ -1,0 +1,16 @@
+services:
+  homenvr:
+    build: .
+    image: homenvr:latest
+    container_name: homenvr
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: ${TZ:-America/Toronto}
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.yml:/config/config.yml:ro
+      - ${RECORDINGS_DIR:-./recordings}:/recordings
+    tmpfs:
+      - /tmp/homenvr-live:size=256m   # live-view HLS segments; RAM only

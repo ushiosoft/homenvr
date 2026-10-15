@@ -1,0 +1,13 @@
+# Simulated Hikvision NVR RTSP proxy for end-to-end tests.
+rtspAuthMethods: [digest]
+protocols: [tcp]
+hls: no
+webrtc: no
+srt: no
+rtmp: no
+authInternalUsers:
+  - user: admin
+    pass: "S3cret!pw"
+    permissions: [{action: read}, {action: publish}]
+paths:
+  "~^Streaming/Channels/[0-9]+$": {}

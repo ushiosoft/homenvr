@@ -1,0 +1,226 @@
+"""ffmpeg process supervision: one recorder and one live-view process per camera."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import shutil
+import time
+from collections import deque
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .config import Camera, Config
+from .storage import FFMPEG_PATTERN, Storage
+
+log = logging.getLogger(__name__)
+
+FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
+FFPROBE = os.environ.get("FFPROBE", "ffprobe")
+RTSP_TIMEOUT_US = "10000000"  # 10 s socket timeout so dead streams get restarted
+
+
+def input_args(url: str, transport: str) -> list[str]:
+    # genpts/discardcorrupt: camera RTSP streams often start with packets that
+    # have no PTS or are damaged by WiFi loss.
+    return ["-avoid_negative_ts", "make_zero", "-fflags", "+genpts+discardcorrupt",
+            "-rtsp_transport", transport, "-timeout", RTSP_TIMEOUT_US, "-i", url]
+
+
+def redact(text: str) -> str:
+    """Strip credentials from rtsp://user:pass@host URLs in log text."""
+    import re
+
+    return re.sub(r"(rtsp://)[^/@\s]+@", r"\1***@", text)
+
+
+async def probe(url: str, transport: str = "tcp", timeout: float = 20) -> dict:
+    """Return {'video': codec, 'width', 'height', 'audio': codec|None} for an RTSP URL."""
+    proc = await asyncio.create_subprocess_exec(
+        FFPROBE, "-v", "error", "-rtsp_transport", transport, "-timeout", RTSP_TIMEOUT_US,
+        "-show_entries", "stream=codec_type,codec_name,width,height", "-of", "json", url,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise RuntimeError("ffprobe timed out")
+    if proc.returncode != 0:
+        raise RuntimeError(redact(err.decode(errors="replace").strip()) or f"ffprobe exit {proc.returncode}")
+    streams = json.loads(out or b"{}").get("streams", [])
+    v = next((s for s in streams if s.get("codec_type") == "video"), None)
+    a = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    if not v:
+        raise RuntimeError("no video stream")
+    return {"video": v.get("codec_name"), "width": v.get("width"), "height": v.get("height"),
+            "audio": a.get("codec_name") if a else None}
+
+
+def _video_tag(codec: str | None) -> list[str]:
+    # hvc1 (parameter sets in the sample entry) is what Safari/Chrome expect for HEVC in MP4.
+    return ["-tag:v", "hvc1"] if codec == "hevc" else []
+
+
+def _audio_args(mode: str, audio_codec: str | None) -> list[str]:
+    if not audio_codec or mode == "none":
+        return []
+    if mode == "copy" or (mode == "aac" and audio_codec == "aac"):
+        return ["-map", "0:a:0", "-c:a", "copy"]
+    return ["-map", "0:a:0", "-c:a", "aac", "-b:a", "64k", "-ar", "16000"]
+
+
+def record_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]:
+    return [
+        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "warning",
+        *input_args(cam.record_url, cfg.rtsp_transport),
+        "-map", "0:v:0", "-c:v", "copy", *_video_tag(info["video"]),
+        *_audio_args(cam.audio, info.get("audio")),
+        "-f", "segment", "-segment_time", str(cfg.segment_seconds),
+        "-segment_atclocktime", "1", "-reset_timestamps", "1", "-strftime", "1",
+        "-segment_format", "mp4",
+        # Fragmented MP4: the in-progress segment is playable and a crash loses
+        # at most one fragment instead of the whole file.
+        "-segment_format_options", "movflags=+frag_keyframe+empty_moov+default_base_moof",
+        str(out_dir / FFMPEG_PATTERN),
+    ]
+
+
+def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]:
+    if cam.live_codec == "h264" and info["video"] != "h264":
+        video = ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+                 "-g", "25", "-sc_threshold", "0", "-b:v", "1500k"]
+    else:
+        video = ["-c:v", "copy", *_video_tag(info["video"])]
+    return [
+        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "warning",
+        *input_args(cam.live_url, cfg.rtsp_transport),
+        "-map", "0:v:0", *video, "-an",
+        "-f", "hls", "-hls_time", "1", "-hls_list_size", "6",
+        "-hls_flags", "delete_segments+omit_endlist+independent_segments",
+        "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
+        str(out_dir / "index.m3u8"),
+    ]
+
+
+@dataclass
+class ProcState:
+    kind: str
+    running: bool = False
+    started_at: float | None = None
+    restarts: int = 0
+    last_error: str = ""
+    stream: dict | None = None
+    log_tail: deque = field(default_factory=lambda: deque(maxlen=20))
+
+    def as_dict(self) -> dict:
+        return {
+            "running": self.running,
+            "started_at": self.started_at,
+            "restarts": self.restarts,
+            "last_error": self.last_error,
+            "stream": self.stream,
+        }
+
+
+class Worker:
+    """Keeps one ffmpeg process alive with exponential backoff."""
+
+    def __init__(self, cam: Camera, cfg: Config, kind: str, out_dir: Path):
+        self.cam, self.cfg, self.kind, self.out_dir = cam, cfg, kind, out_dir
+        self.state = ProcState(kind)
+        self._proc: asyncio.subprocess.Process | None = None
+        self._stopping = False
+
+    async def run(self) -> None:
+        backoff = 2.0
+        while not self._stopping:
+            url = self.cam.record_url if self.kind == "record" else self.cam.live_url
+            t0 = time.monotonic()
+            try:
+                info = await probe(url, self.cfg.rtsp_transport)
+                self.state.stream = info
+                self.out_dir.mkdir(parents=True, exist_ok=True)
+                if self.kind == "live":
+                    for f in self.out_dir.iterdir():  # stale playlist from a previous run
+                        f.unlink(missing_ok=True)
+                cmd = (record_cmd if self.kind == "record" else live_cmd)(self.cam, self.cfg, info, self.out_dir)
+                log.info("[%s/%s] start: %s", self.cam.id, self.kind, redact(" ".join(cmd)))
+                self._proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE, env={**os.environ, "TZ": "UTC"},
+                )
+                self.state.running, self.state.started_at = True, time.time()
+                assert self._proc.stderr
+                async for line in self._proc.stderr:
+                    msg = redact(line.decode(errors="replace").rstrip())
+                    if msg:
+                        self.state.log_tail.append(msg)
+                        log.warning("[%s/%s] %s", self.cam.id, self.kind, msg)
+                rc = await self._proc.wait()
+                self.state.last_error = self.state.log_tail[-1] if self.state.log_tail else f"ffmpeg exited {rc}"
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # probe failure, spawn failure
+                self.state.last_error = redact(str(e))
+                log.error("[%s/%s] %s", self.cam.id, self.kind, self.state.last_error)
+            finally:
+                self.state.running = False
+                self._proc = None
+            if self._stopping:
+                break
+            if time.monotonic() - t0 > 60:
+                backoff = 2.0  # it ran for a while; this is a fresh failure
+            self.state.restarts += 1
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+
+    async def stop(self) -> None:
+        self._stopping = True
+        p = self._proc
+        if p and p.returncode is None:
+            # 'q' on stdin isn't available (DEVNULL); SIGINT lets ffmpeg finalize the segment.
+            p.send_signal(2)
+            try:
+                await asyncio.wait_for(p.wait(), 10)
+            except asyncio.TimeoutError:
+                p.kill()
+
+
+class Supervisor:
+    def __init__(self, cfg: Config, storage: Storage):
+        self.cfg, self.storage = cfg, storage
+        self.workers: dict[tuple[str, str], Worker] = {}
+        self._tasks: list[asyncio.Task] = []
+
+    async def start(self) -> None:
+        if not shutil.which(FFMPEG):
+            raise RuntimeError("ffmpeg not found")
+        for cam in self.cfg.cameras:
+            if not cam.enabled:
+                continue
+            for kind, out in (("record", self.storage.camera_dir(cam.id)), ("live", self.cfg.live_dir / cam.id)):
+                w = Worker(cam, self.cfg, kind, out)
+                self.workers[(cam.id, kind)] = w
+                self._tasks.append(asyncio.create_task(w.run(), name=f"{cam.id}-{kind}"))
+        self._tasks.append(asyncio.create_task(self._retention_loop(), name="retention"))
+
+    async def _retention_loop(self) -> None:
+        r = self.cfg.retention
+        while True:
+            try:
+                await asyncio.to_thread(self.storage.enforce_retention, r.max_gb, r.max_days, r.min_free_gb)
+            except Exception:
+                log.exception("retention failed")
+            await asyncio.sleep(60)
+
+    async def stop(self) -> None:
+        await asyncio.gather(*(w.stop() for w in self.workers.values()), return_exceptions=True)
+        for t in self._tasks:
+            t.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+
+    def status(self, cam_id: str) -> dict:
+        return {k: w.state.as_dict() for (c, k), w in self.workers.items() if c == cam_id}
