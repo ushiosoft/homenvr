@@ -18,7 +18,18 @@
   .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fill, minmax(420px, 1fr)); }
   @media (max-width:480px) { .grid { grid-template-columns:1fr; } }
   .tile { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .tile video { width:100%; aspect-ratio:16/9; background:#000; display:block; }
+  .vwrap { position:relative; overflow:hidden; aspect-ratio:16/9; background:#000; }
+  .vwrap.tall { aspect-ratio:9/16; }
+  .vwrap video { width:100%; height:100%; object-fit:contain; display:block; transform-origin:center center; will-change:transform; }
+  .vwrap.zoomed video { cursor:grab; }
+  .vwrap.zoomed video:active { cursor:grabbing; }
+  .ctls { position:absolute; top:6px; right:6px; display:flex; gap:4px; z-index:2; opacity:0; transition:opacity .15s; }
+  .vwrap:hover .ctls { opacity:1; }
+  .iconbtn { background:rgba(0,0,0,.55); color:#fff; border:0; border-radius:5px; width:28px; height:28px; font-size:13px; cursor:pointer; line-height:1; }
+  .iconbtn:hover { background:rgba(0,0,0,.8); }
+  .playtap { position:absolute; inset:0; margin:auto; width:140px; height:40px; background:rgba(0,0,0,.6); color:#fff; border:0; border-radius:8px; cursor:pointer; z-index:3; }
+  .zhint { position:absolute; bottom:6px; left:8px; z-index:2; font-size:11px; color:#fff; background:rgba(0,0,0,.5); padding:1px 6px; border-radius:4px; opacity:0; transition:opacity .15s; }
+  .vwrap:hover .zhint { opacity:.85; }
   .tile .bar { display:flex; gap:8px; padding:6px 10px; align-items:center; font-size:12px; }
   .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); display:inline-block; }
   .dot.ok { background:var(--rec); }
@@ -26,7 +37,9 @@
   .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
   select, input, button.btn { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--fg); }
   button.btn { cursor:pointer; }
-  #player { width:100%; max-height:70vh; background:#000; border-radius:8px; }
+  #playerWrap { position:relative; overflow:hidden; background:#000; border-radius:8px; }
+  #player { width:100%; max-height:70vh; display:block; background:#000; transform-origin:center center; will-change:transform; }
+  #playerWrap.zoomed #player { cursor:grab; }
   #timeline { position:relative; height:44px; background:var(--panel); border:1px solid var(--line); border-radius:6px; margin-top:10px; cursor:pointer; user-select:none; }
   #timeline .seg { position:absolute; top:8px; bottom:16px; background:var(--accent); opacity:.55; }
   #timeline .cursor { position:absolute; top:0; bottom:0; width:2px; background:var(--bad); }
@@ -34,13 +47,20 @@
   #timeline .evt:hover { height:15px; background:#fbbf24; }
   #timeline .tick { position:absolute; bottom:0; font-size:10px; color:var(--muted); transform:translateX(-50%); }
   #now { color:var(--muted); font-variant-numeric:tabular-nums; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; max-width:680px; }
+  .card h3 { margin:0 0 4px; font-size:14px; }
+  .card p.hint { margin:0 0 12px; color:var(--muted); font-size:12px; }
+  .frow { display:flex; gap:10px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+  .frow label { width:170px; color:var(--muted); }
+  .frow input, .frow select { flex:1; min-width:140px; }
+  .saved { color:var(--rec); font-size:12px; margin-left:8px; }
   .hidden { display:none; }
 </style>
 </head>
 <body>
 <header>
   <h1>homenvr</h1>
-  <nav><button id="tab-live" class="on">Live</button><button id="tab-play">Playback</button></nav>
+  <nav><button id="tab-live" class="on">Live</button><button id="tab-play">Playback</button><button id="tab-settings">Settings</button></nav>
   <span id="usage"></span>
 </header>
 <main>
@@ -52,13 +72,15 @@
       <button class="btn" id="prev">◀ day</button><button class="btn" id="next">day ▶</button>
       <button class="btn" id="prevEvt" title="previous motion">◀ motion</button><button class="btn" id="nextEvt" title="next motion">motion ▶</button>
       <span id="now"></span>
+      <button class="btn" id="rotPlay" title="Rotate view">⟳ rotate</button>
       <span style="flex:1"></span>
       <label>Export <input id="exlen" type="number" value="60" min="1" max="360" style="width:64px"> s from cursor</label>
       <button class="btn" id="export">Download clip</button>
     </div>
-    <video id="player" controls playsinline muted></video>
+    <div id="playerWrap"><video id="player" controls playsinline muted></video></div>
     <div id="timeline"></div>
   </section>
+  <section id="settings" class="hidden"></section>
 </main>
 <script src="hls.min.js"></script>
 <script>
@@ -76,12 +98,12 @@ function tryPlay(video) {
   const p = video.play();
   if (p) p.catch(() => {
     // Autoplay still blocked: show a one-tap overlay on this tile.
-    const tile = video.closest('.tile');
-    if (tile && !tile.querySelector('.playtap')) {
+    const wrap = video.closest('.vwrap, #playerWrap');
+    if (wrap && !wrap.querySelector('.playtap')) {
       const b = document.createElement('button');
       b.className = 'playtap'; b.textContent = '▶ Tap to play';
       b.onclick = () => { video.muted = true; video.play(); b.remove(); };
-      tile.appendChild(b);
+      wrap.appendChild(b);
     }
   });
 }
@@ -109,16 +131,72 @@ async function loadCameras() {
   $('#usage').textContent = `${fmtBytes(st.storage.recordings_bytes)} recorded · ${fmtBytes(st.storage.disk_free_bytes)} free · keep ${r.max_days || '∞'} d / ${r.max_gb || '∞'} GB`;
 }
 
+// ---- rotate / zoom / pan transform engine ----
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+function getRot(id) { try { return +localStorage.getItem('rot.' + id) || 0; } catch { return 0; } }
+function saveRot(id, deg) { try { localStorage.setItem('rot.' + id, deg); } catch {} }
+
+function applyXform(video) {
+  const x = video._xf || (video._xf = { zoom: 1, px: 0, py: 0, rot: 0 });
+  video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${x.zoom}) rotate(${x.rot}deg)`;
+  const wrap = video.closest('.vwrap, #playerWrap');
+  if (wrap) {
+    wrap.classList.toggle('zoomed', x.zoom > 1);
+    wrap.classList.toggle('tall', x.rot % 180 !== 0);  // vertical orientation
+  }
+}
+function makeInteractive(video, id) {
+  const x = video._xf = { zoom: 1, px: 0, py: 0, rot: id ? getRot(id) : 0 };
+  applyXform(video);
+  video.addEventListener('wheel', e => {
+    e.preventDefault();
+    const prev = x.zoom;
+    x.zoom = clamp(x.zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 1, 6);
+    if (x.zoom === 1) { x.px = 0; x.py = 0; }
+    else { const k = x.zoom / prev; x.px *= k; x.py *= k; }
+    applyXform(video);
+  }, { passive: false });
+  let drag = null;
+  video.addEventListener('pointerdown', e => {
+    if (x.zoom <= 1) return;
+    drag = { sx: e.clientX, sy: e.clientY, px: x.px, py: x.py };
+    video.setPointerCapture(e.pointerId);
+  });
+  video.addEventListener('pointermove', e => {
+    if (!drag) return;
+    x.px = drag.px + (e.clientX - drag.sx); x.py = drag.py + (e.clientY - drag.sy);
+    applyXform(video);
+  });
+  const end = () => { drag = null; };
+  video.addEventListener('pointerup', end);
+  video.addEventListener('pointercancel', end);
+  return x;
+}
+function rotate(video, id) {
+  const x = video._xf; x.rot = (x.rot + 90) % 360;
+  x.zoom = 1; x.px = 0; x.py = 0;              // reset zoom on rotate to avoid confusion
+  if (id) saveRot(id, x.rot);
+  applyXform(video);
+}
+
 function renderLive() {
   hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = [];
   const root = $('#live'); root.innerHTML = '';
   for (const c of cameras) {
     const t = document.createElement('div'); t.className = 'tile';
-    t.innerHTML = `<video muted autoplay playsinline></video><div class="bar"><span class="dot"></span><b></b><span class="err"></span></div>`;
+    t.innerHTML = `<div class="vwrap"><video muted autoplay playsinline></video>
+      <div class="ctls"><button class="iconbtn rot" title="Rotate">⟳</button>
+      <button class="iconbtn fs" title="Fullscreen">⛶</button></div>
+      <span class="zhint">scroll to zoom · drag to pan</span></div>
+      <div class="bar"><span class="dot"></span><b></b><span class="err"></span></div>`;
     t.querySelector('b').textContent = c.name;
-    t.querySelector('video').ondblclick = e => e.target.requestFullscreen?.();
+    const v = t.querySelector('video');
+    makeInteractive(v, c.id);
+    t.querySelector('.rot').onclick = () => rotate(v, c.id);
+    t.querySelector('.fs').onclick = () => (t.querySelector('.vwrap').requestFullscreen?.());
+    v.ondblclick = () => t.querySelector('.vwrap').requestFullscreen?.();
     root.appendChild(t);
-    hlsPlayers.push(attach(t.querySelector('video'), c.live));
+    hlsPlayers.push(attach(v, c.live));
   }
   updateStatus();
 }
@@ -195,11 +273,16 @@ $('#player').addEventListener('ended', () => { // continue into the next segment
   const i = segs.findIndex(x => x.name === current?.name);
   if (i >= 0 && segs[i+1]) playAt(segs[i+1].start);
 });
+makeInteractive($('#player'));
+function applyPlayerRotation() {
+  const v = $('#player'); v._xf.rot = getRot($('#cam').value); v._xf.zoom = 1; v._xf.px = 0; v._xf.py = 0; applyXform(v);
+}
+$('#rotPlay').onclick = () => rotate($('#player'), $('#cam').value);
 $('#timeline').addEventListener('click', e => {
   const r = e.currentTarget.getBoundingClientRect();
   playAt(dayStart + (e.clientX - r.left) / r.width * DAY);
 });
-$('#cam').onchange = () => { current = null; loadDay(); };
+$('#cam').onchange = () => { current = null; applyPlayerRotation(); loadDay(); };
 $('#day').onchange = e => { const [y,m,d] = e.target.value.split('-').map(Number); setDay(new Date(y, m-1, d)); };
 $('#prev').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()-1); setDay(d); };
 $('#next').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()+1); setDay(d); };
@@ -211,18 +294,91 @@ $('#export').onclick = () => {
 };
 
 function tab(name) {
-  $('#tab-live').classList.toggle('on', name === 'live'); $('#tab-play').classList.toggle('on', name === 'play');
-  $('#live').classList.toggle('hidden', name !== 'live'); $('#play').classList.toggle('hidden', name !== 'play');
-  if (name === 'live') renderLive(); else { hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = []; document.querySelectorAll('#live video').forEach(v => v.removeAttribute('src')); }
-  if (name === 'play' && !dayStart) { const d = new Date(); d.setHours(0,0,0,0); setDay(d); }
+  for (const n of ['live', 'play', 'settings']) {
+    $('#tab-' + n).classList.toggle('on', name === n);
+    $('#' + n).classList.toggle('hidden', name !== n);
+  }
+  if (name === 'live') renderLive();
+  else { hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = []; document.querySelectorAll('#live video').forEach(v => v.removeAttribute('src')); }
+  if (name === 'play') { if (!dayStart) { const d = new Date(); d.setHours(0,0,0,0); setDay(d); } applyPlayerRotation(); }
+  if (name === 'settings') renderSettings();
 }
-$('#tab-live').onclick = () => tab('live'); $('#tab-play').onclick = () => tab('play');
+$('#tab-live').onclick = () => tab('live');
+$('#tab-play').onclick = () => tab('play');
+$('#tab-settings').onclick = () => tab('settings');
+
+// ---- settings page ----
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+async function renderSettings() {
+  const root = $('#settings');
+  root.innerHTML = '<p class="hint">Loading…</p>';
+  let cfg;
+  try { cfg = await api('api/config'); } catch { root.innerHTML = '<p class="hint">Failed to load settings.</p>'; return; }
+  const a = cfg.settings.alerts, m = cfg.settings.motion, r = cfg.settings.retention;
+  const opt = (v, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v}</option>`;
+  root.innerHTML = `
+    <div class="card">
+      <h3>Alerts</h3>
+      <p class="hint">Get notified if a camera stops recording or the disk fills. Secrets show as ${'•••'}; leave them to keep the stored value.</p>
+      <div class="frow"><label>Notifier</label><select id="s_notifier">${cfg.notifiers.map(n => opt(n, a.notifier)).join('')}</select></div>
+      <div class="frow nf nf-ntfy"><label>ntfy URL</label><input id="s_ntfy" value="${esc(a.ntfy_url)}" placeholder="https://ntfy.sh/your-topic"></div>
+      <div class="frow nf nf-webhook"><label>Discord/Slack webhook</label><input id="s_webhook" value="${esc(a.webhook_url)}" placeholder="https://discord.com/api/webhooks/..."></div>
+      <div class="frow nf nf-telegram"><label>Telegram bot token</label><input id="s_tg_token" value="${esc(a.telegram.bot_token)}" placeholder="123456:ABC-..."></div>
+      <div class="frow nf nf-telegram"><label>Telegram chat ID</label><input id="s_tg_chat" value="${esc(a.telegram.chat_id)}" placeholder="e.g. 123456789"></div>
+      <div class="frow"><label>Alert if stalled (sec)</label><input id="s_stale" type="number" min="10" value="${a.stale_segment_seconds}"></div>
+      <div class="frow"><button class="btn" id="s_save">Save alerts</button><button class="btn" id="s_test">Send test alert</button><span class="saved" id="s_amsg"></span></div>
+    </div>
+    <div class="card">
+      <h3>Motion detection</h3>
+      <p class="hint">Marks activity on the playback timeline. ${m.enabled ? '' : '<b>Disabled</b> — enable in config.yml and restart.'} Sensitivity is lower = more sensitive.</p>
+      <div class="frow"><label>Sensitivity</label><input id="s_sens" type="number" step="0.5" min="0.1" value="${m.sensitivity}"></div>
+      <div class="frow"><label>Merge gap (sec)</label><input id="s_gap" type="number" min="1" value="${m.min_gap_seconds}"></div>
+      <div class="frow"><button class="btn" id="s_savem">Save motion</button><span class="saved" id="s_mmsg"></span></div>
+    </div>
+    <div class="card">
+      <h3>Retention</h3>
+      <p class="hint">Oldest footage is deleted first. 0 = unlimited.</p>
+      <div class="frow"><label>Keep days</label><input id="s_days" type="number" min="0" value="${r.max_days}"></div>
+      <div class="frow"><label>Max total GB</label><input id="s_maxgb" type="number" min="0" value="${r.max_gb}"></div>
+      <div class="frow"><label>Keep free GB</label><input id="s_free" type="number" min="0" value="${r.min_free_gb}"></div>
+      <div class="frow"><button class="btn" id="s_saver">Save retention</button><span class="saved" id="s_rmsg"></span></div>
+    </div>`;
+  const syncNotifierFields = () => {
+    const n = $('#s_notifier').value;
+    document.querySelectorAll('#settings .nf').forEach(el => {
+      el.style.display = el.classList.contains('nf-' + n) ? '' : 'none';
+    });
+  };
+  $('#s_notifier').onchange = syncNotifierFields; syncNotifierFields();
+
+  const save = async (patch, msgEl) => {
+    msgEl.textContent = 'Saving…'; msgEl.style.color = '';
+    try { await fetch('api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+            .then(r => { if (!r.ok) throw new Error(r.status); }); msgEl.textContent = '✓ saved'; }
+    catch (e) { msgEl.textContent = 'save failed (' + e.message + ')'; msgEl.style.color = 'var(--bad)'; }
+    setTimeout(() => { msgEl.textContent = ''; }, 4000);
+  };
+  $('#s_save').onclick = () => save({ alerts: {
+    notifier: $('#s_notifier').value, ntfy_url: $('#s_ntfy').value, webhook_url: $('#s_webhook').value,
+    telegram: { bot_token: $('#s_tg_token').value, chat_id: $('#s_tg_chat').value },
+    stale_segment_seconds: +$('#s_stale').value } }, $('#s_amsg'));
+  $('#s_test').onclick = async () => {
+    const el = $('#s_amsg'); el.textContent = 'sending…'; el.style.color = '';
+    try { const r = await fetch('api/alerts/test', { method: 'POST' }); const j = await r.json();
+      if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+      el.textContent = j.delivered ? '✓ sent via ' + j.notifier : 'notifier is "none" — pick & save one first';
+    } catch (e) { el.textContent = 'failed: ' + e.message; el.style.color = 'var(--bad)'; }
+    setTimeout(() => { el.textContent = ''; }, 6000);
+  };
+  $('#s_savem').onclick = () => save({ motion: { sensitivity: +$('#s_sens').value, min_gap_seconds: +$('#s_gap').value } }, $('#s_mmsg'));
+  $('#s_saver').onclick = () => save({ retention: { max_days: +$('#s_days').value, max_gb: +$('#s_maxgb').value, min_free_gb: +$('#s_free').value } }, $('#s_rmsg'));
+}
 
 (async () => {
   await loadCameras();
   $('#cam').innerHTML = cameras.map(c => `<option value="${c.id}">${c.name.replace(/</g,'&lt;')}</option>`).join('');
   tab('live');
-  setInterval(async () => { await loadCameras(); updateStatus(); }, 10000);
+  setInterval(async () => { if (!$('#live').classList.contains('hidden')) { await loadCameras(); updateStatus(); } }, 10000);
 })();
 </script>
 </body>

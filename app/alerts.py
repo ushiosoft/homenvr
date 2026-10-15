@@ -61,6 +61,21 @@ class WebhookNotifier(Notifier):
         urllib.request.urlopen(req, timeout=TIMEOUT).close()
 
 
+class TelegramNotifier(Notifier):
+    def __init__(self, bot_token: str, chat_id: str):
+        self.token, self.chat_id = bot_token, chat_id
+
+    def send(self, title: str, message: str, *, failing: bool) -> None:
+        icon = "🔴" if failing else "🟢"
+        data = json.dumps({"chat_id": self.chat_id,
+                           "text": f"{icon} *{title}*\n{message}",
+                           "parse_mode": "Markdown"}).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{self.token}/sendMessage",
+            data=data, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=TIMEOUT).close()
+
+
 class SmtpNotifier(Notifier):
     def __init__(self, smtp: dict):
         self.s = smtp
@@ -83,8 +98,10 @@ class SmtpNotifier(Notifier):
 def make_notifier(a: Alerts) -> Notifier:
     if a.notifier == "ntfy" and a.ntfy_url:
         return NtfyNotifier(a.ntfy_url)
-    if a.notifier == "webhook" and a.webhook_url:
+    if a.notifier == "webhook" and a.webhook_url:  # Discord/Slack
         return WebhookNotifier(a.webhook_url)
+    if a.notifier == "telegram" and a.telegram.get("bot_token") and a.telegram.get("chat_id"):
+        return TelegramNotifier(a.telegram["bot_token"], a.telegram["chat_id"])
     if a.notifier == "smtp" and a.smtp.get("to"):
         return SmtpNotifier(a.smtp)
     return NullNotifier()

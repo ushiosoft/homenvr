@@ -228,7 +228,14 @@ class Supervisor:
         self.workers: dict[tuple[str, str], Worker] = {}
         self.motion: dict[str, object] = {}
         self.events = None  # EventStore, set in start() if motion enabled
+        self.watchdog = None  # set in _watchdog_loop
         self._tasks: list[asyncio.Task] = []
+
+    def reload_notifier(self) -> None:
+        """Rebuild the alert notifier from the (possibly updated) config."""
+        from .alerts import make_notifier
+        if self.watchdog is not None:
+            self.watchdog.notifier = make_notifier(self.cfg.alerts)
 
     async def start(self) -> None:
         if not shutil.which(FFMPEG):

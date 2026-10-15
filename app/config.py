@@ -61,9 +61,10 @@ class Retention:
 
 @dataclass
 class Alerts:
-    notifier: str = "none"  # none | ntfy | webhook | smtp
+    notifier: str = "none"  # none | ntfy | webhook | telegram | smtp
     ntfy_url: str = ""
-    webhook_url: str = ""
+    webhook_url: str = ""  # Discord/Slack/Mattermost incoming webhook
+    telegram: dict = field(default_factory=dict)  # {bot_token, chat_id}
     smtp: dict = field(default_factory=dict)
     stale_segment_seconds: int = 180  # recorder "running" but no new data this long
     check_interval: int = 60
@@ -166,6 +167,7 @@ def parse(raw: dict) -> Config:
             notifier=str(a.get("notifier", "none")),
             ntfy_url=str(a.get("ntfy_url", "")),
             webhook_url=str(a.get("webhook_url", "")),
+            telegram=dict(a.get("telegram") or {}),
             smtp=dict(a.get("smtp") or {}),
             stale_segment_seconds=int(a.get("stale_segment_seconds", 180)),
             check_interval=int(a.get("check_interval", 60)),

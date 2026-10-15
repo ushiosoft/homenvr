@@ -32,6 +32,9 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     storage = Storage(cfg.storage_dir)
     cfg.storage_dir.mkdir(parents=True, exist_ok=True)
     cfg.live_dir.mkdir(parents=True, exist_ok=True)
+    # Layer the runtime-editable settings overlay (from the settings page) on top.
+    from . import settings as settings_mod
+    settings_mod.apply(cfg, settings_mod.load_overlay(settings_mod.settings_path(cfg)))
     sup = Supervisor(cfg, storage)
 
     @asynccontextmanager
@@ -149,9 +152,33 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     async def alerts_test():
         from .alerts import make_notifier
         n = make_notifier(cfg.alerts)
-        await asyncio.to_thread(n.send, "homenvr test alert",
-                                "This is a test notification from homenvr.", failing=False)
-        return {"sent": True, "notifier": cfg.alerts.notifier}
+        from .alerts import NullNotifier
+        try:
+            await asyncio.to_thread(n.send, "homenvr test alert",
+                                    "This is a test notification from homenvr.", failing=False)
+        except Exception as e:
+            raise HTTPException(502, f"notifier failed: {e}")
+        return {"sent": True, "notifier": cfg.alerts.notifier,
+                "delivered": not isinstance(n, NullNotifier)}
+
+    @app.get("/api/config")
+    async def get_config():
+        from . import settings as s
+        return {"settings": s.current(cfg),
+                "cameras": [{"id": c.id, "name": c.name, "channel": c.channel} for c in cfg.cameras],
+                "segment_seconds": cfg.segment_seconds,
+                "notifiers": ["none", "ntfy", "webhook", "telegram", "smtp"]}
+
+    @app.post("/api/config")
+    async def post_config(request: Request):
+        from . import settings as s
+        patch = await request.json()
+        try:
+            result = await asyncio.to_thread(s.update, cfg, s.settings_path(cfg), patch)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        sup.reload_notifier()  # apply alert changes live
+        return {"settings": result}
 
     @app.get("/live/{cam_id}/{name}")
     async def live(cam_id: str, name: str):

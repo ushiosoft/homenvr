@@ -6,3 +6,4 @@ __pycache__/
 .pytest_cache/
 app/static/hls.min.js
 samples/
+settings.json
