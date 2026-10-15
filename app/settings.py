@@ -43,6 +43,12 @@ SCHEMA = {
         "min_free_gb": ("float", (0.0, 1_000_000.0)),
     },
 }
+# Per-camera editable fields (overlay key "cameras": {cam_id: {field: value}}).
+CAMERA_SCHEMA = {
+    "name": ("str", None),
+    "rotation": ("enum_int", [0, 90, 180, 270]),
+    "motion_sensitivity": ("float", (0.0, 255.0)),
+}
 _SECRET_FIELDS = {"ntfy_url", "webhook_url"}  # telegram.bot_token handled separately
 
 
@@ -53,6 +59,13 @@ def _coerce(kind, bounds, value):
         return value
     if kind == "bool":
         return bool(value)
+    if kind == "str":
+        return str(value)[:64]
+    if kind == "enum_int":
+        v = int(value)
+        if v not in bounds:
+            raise ValueError(f"must be one of {bounds}")
+        return v
     if kind == "int":
         v = int(value)
     elif kind == "float":
@@ -86,6 +99,14 @@ def save_overlay(path: str | Path, data: dict) -> None:
 def apply(cfg: Config, overlay: dict) -> None:
     """Mutate cfg in place from a (trusted, already-validated) overlay."""
     for section, fields in overlay.items():
+        if section == "cameras":
+            for cam_id, cfields in (fields or {}).items():
+                cam = cfg.camera(cam_id)
+                if cam:
+                    for k, v in cfields.items():
+                        if hasattr(cam, k):
+                            setattr(cam, k, v)
+            continue
         target = getattr(cfg, section, None)
         if target is None:
             continue
@@ -112,6 +133,8 @@ def current(cfg: Config) -> dict:
         "motion": {"enabled": m.enabled, "sensitivity": m.sensitivity,
                    "min_gap_seconds": m.min_gap_seconds, "detect": m.detect},
         "retention": {"max_days": r.max_days, "max_gb": r.max_gb, "min_free_gb": r.min_free_gb},
+        "cameras": [{"id": c.id, "name": c.name, "rotation": c.rotation,
+                     "motion_sensitivity": c.motion_sensitivity} for c in cfg.cameras],
     }
 
 
@@ -122,6 +145,21 @@ def _validate_patch(cfg: Config, patch: dict) -> dict:
     """
     out: dict = {}
     for section, fields in patch.items():
+        if section == "cameras" and isinstance(fields, dict):
+            cams_out: dict = {}
+            for cam_id, cfields in fields.items():
+                if cfg.camera(cam_id) is None or not isinstance(cfields, dict):
+                    continue
+                co: dict = {}
+                for k, v in cfields.items():
+                    if k in CAMERA_SCHEMA:
+                        kind, bounds = CAMERA_SCHEMA[k]
+                        co[k] = _coerce(kind, bounds, v)
+                if co:
+                    cams_out[cam_id] = co
+            if cams_out:
+                out["cameras"] = cams_out
+            continue
         if section not in SCHEMA or not isinstance(fields, dict):
             continue
         sec_out: dict = {}
@@ -155,7 +193,12 @@ def update(cfg: Config, path: str | Path, patch: dict) -> dict:
     apply(cfg, validated)
     overlay = load_overlay(path)
     for section, fields in validated.items():
-        overlay.setdefault(section, {}).update(fields)
+        if section == "cameras":  # merge per-camera so other saved fields survive
+            dst = overlay.setdefault("cameras", {})
+            for cam_id, cfields in fields.items():
+                dst.setdefault(cam_id, {}).update(cfields)
+        else:
+            overlay.setdefault(section, {}).update(fields)
     save_overlay(path, overlay)
     return current(cfg)
 

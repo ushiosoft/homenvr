@@ -79,6 +79,7 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
                 "status": sup.status(c.id),
                 "first": first,
                 "last": last,
+                "rotation": c.rotation,
                 "live": f"live/{c.id}/index.m3u8",
             })
         return out
@@ -105,17 +106,20 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     async def playback(cam_id: str, start: float = Query(...), dur: float = Query(300)):
         """Transcode a window [start, start+dur) to H.264 and stream it progressively
         (fragmented MP4), so HEVC recordings are playable in any browser."""
-        camera_or_404(cam_id)
+        cam = camera_or_404(cam_id)
         dur = min(max(dur, 1), 1800)
         script = storage.concat_list(cam_id, start, start + dur)
         if script.count("\nfile ") == 0:
             raise HTTPException(404, "no recordings at that time")
         tmpdir = Path(tempfile.mkdtemp(prefix="pb-"))
         (tmpdir / "list.ffconcat").write_text(script)
+        from .recorder import rotation_vf
+        rv = rotation_vf(cam.rotation)
+        vf = (rv + "," if rv else "") + "scale=-2:720"
         proc = await asyncio.create_subprocess_exec(
             FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0",
             "-f", "concat", "-i", str(tmpdir / "list.ffconcat"), "-t", str(dur),
-            "-vf", "scale=-2:720", "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+            "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k",
             "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
@@ -305,13 +309,13 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
 
     @app.get("/api/cameras/{cam_id}/thumb")
     async def thumb(cam_id: str, ts: float = Query(...)):
-        camera_or_404(cam_id)
+        cam = camera_or_404(cam_id)
         from .recorder import thumbnail
         path, offset = await asyncio.to_thread(storage.segment_at, cam_id, ts)
         if not path:
             raise HTTPException(404, "no recording at that time")
         try:
-            img = await thumbnail(path, offset)
+            img = await thumbnail(path, offset, rot=cam.rotation)
         except Exception as e:
             raise HTTPException(502, f"thumbnail failed: {e}")
         return Response(img, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})

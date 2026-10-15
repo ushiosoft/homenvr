@@ -9,7 +9,7 @@ cameras:            # channel = NVR channel number (D1, D2, D3...)
   # Your cameras: main = HEVC 2560x1440, sub = HEVC 640x360, audio = G.711.
   # Sub streams are H.265, which browsers can't play, so live_codec: h264
   # transcodes the small 640x360 preview (cheap). Recording keeps original HEVC.
-  - {id: cam1, name: Camera 1, channel: 1, live_codec: h264}
+  - {id: cam1, name: Camera 1, channel: 1, live_codec: h264}   # per-camera: rotation (0/90/180/270), motion_sensitivity (0=global), audio, enabled
   - {id: cam2, name: Camera 2, channel: 2, live_codec: h264}
   - {id: cam3, name: Camera 3, channel: 3, live_codec: h264}
   # Options per camera:

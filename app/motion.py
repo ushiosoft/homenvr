@@ -29,6 +29,11 @@ ANALYZE_FPS = 5
 ANALYZE_WIDTH = 320
 
 
+def sensitivity_for(cam: Camera, cfg: Config) -> float:
+    """Per-camera motion threshold override, else the global default."""
+    return cam.motion_sensitivity if getattr(cam, "motion_sensitivity", 0) else cfg.motion.sensitivity
+
+
 def motion_cmd(cam: Camera, cfg: Config) -> list[str]:
     vf = (f"fps={ANALYZE_FPS},scale={ANALYZE_WIDTH}:-2,"
           f"tblend=all_mode=difference,signalstats,metadata=print")
@@ -83,7 +88,7 @@ class MotionDetector:
                     if not m:
                         continue
                     yavg = float(m.group(1))
-                    if yavg >= self.cfg.motion.sensitivity and self._record(yavg):
+                    if yavg >= sensitivity_for(self.cam, self.cfg) and self._record(yavg):
                         log.debug("[%s/motion] event YAVG=%.2f", self.cam.id, yavg)
                 await self._proc.wait()
             except asyncio.CancelledError:

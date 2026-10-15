@@ -165,6 +165,7 @@ function attach(video, src) {
 
 async function loadCameras() {
   cameras = await api('api/cameras');
+  for (const c of cameras) camRot[c.id] = c.rotation || 0;
   const st = await api('api/status');
   const r = st.retention, s = st.storage;
   const grace = s.grace_bytes ? ` · ${fmtBytes(s.grace_bytes)} grace` : '';
@@ -173,9 +174,18 @@ async function loadCameras() {
 }
 
 // ---- rotate / zoom / pan transform engine (mouse + touch) ----
+// Rotation is a per-camera SERVER setting (so it syncs across devices and is applied
+// to snapshots/thumbnails/playback server-side). Live view still rotates via CSS.
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-function getRot(id) { try { return +localStorage.getItem('rot.' + id) || 0; } catch { return 0; } }
-function saveRot(id, deg) { try { localStorage.setItem('rot.' + id, deg); } catch {} }
+let camRot = {};  // camId -> degrees, synced from /api/cameras
+function getRot(id) { return camRot[id] || 0; }
+async function setRot(id, deg) {
+  camRot[id] = deg;
+  try {
+    await fetch('api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cameras: { [id]: { rotation: deg } } }) });
+  } catch {}
+}
 
 // When rotated 90/270, scale the video down so the upright (portrait) image fits
 // inside the SAME 16:9 tile, pillarboxed — keeps the grid uniform (no giant tiles).
@@ -241,10 +251,12 @@ function makeInteractive(video, id) {
   video.addEventListener('pointercancel', up);
   return x;
 }
-function rotate(video, id) {
-  const x = video._xf; x.rot = (x.rot + 90) % 360;
-  x.zoom = 1; x.px = 0; x.py = 0;              // reset zoom on rotate
-  if (id) saveRot(id, x.rot);
+// Live view rotation: rotate the tile via CSS and persist the angle to the server
+// (the live HLS isn't server-rotated; snapshots/playback read this same server value).
+function rotateLive(video, id) {
+  const deg = (getRot(id) + 90) % 360;
+  setRot(id, deg);
+  const x = video._xf; x.rot = deg; x.zoom = 1; x.px = 0; x.py = 0;
   applyXform(video);
 }
 
@@ -268,7 +280,7 @@ function renderLive() {
     t.querySelector('.snap').onclick = () => openSnapshot(c.id, c.name);
     t.querySelector('.zin').onclick = () => zoomBy(v, 1.4);
     t.querySelector('.zout').onclick = () => zoomBy(v, 1 / 1.4);
-    t.querySelector('.rot').onclick = () => rotate(v, c.id);
+    t.querySelector('.rot').onclick = () => rotateLive(v, c.id);
     t.querySelector('.fs').onclick = () => (t.querySelector('.vwrap').requestFullscreen?.());
     v.ondblclick = () => t.querySelector('.vwrap').requestFullscreen?.();
     root.appendChild(t);
@@ -408,17 +420,25 @@ $('#player').addEventListener('ended', () => {  // continue into the next window
   if (segs.some(s => s.end > next && s.start < dayStart + DAY)) playAt(next);
 });
 makeInteractive($('#player'));
+// Playback is rotated server-side (stream + thumbnails), so the player itself never
+// CSS-rotates; it only zooms/pans. Reset transform on camera change.
 function applyPlayerRotation() {
-  const v = $('#player'); v._xf.rot = getRot($('#cam').value); v._xf.zoom = 1; v._xf.px = 0; v._xf.py = 0; applyXform(v);
+  const v = $('#player'); v._xf.rot = 0; v._xf.zoom = 1; v._xf.px = 0; v._xf.py = 0; applyXform(v);
 }
-$('#rotPlay').onclick = () => rotate($('#player'), $('#cam').value);
+$('#rotPlay').onclick = async () => {
+  const cam = $('#cam').value;
+  await setRot(cam, (getRot(cam) + 90) % 360);
+  const t = playheadTime();
+  await loadDay();           // refresh thumbnails at the new rotation
+  if (t) playAt(t);          // reload the playback stream at the new rotation
+};
 $('#zinPlay').onclick = () => zoomBy($('#player'), 1.4);
 $('#zoutPlay').onclick = () => zoomBy($('#player'), 1 / 1.4);
 $('#timeline').addEventListener('click', e => {
   const r = e.currentTarget.getBoundingClientRect();
   playAt(dayStart + (e.clientX - r.left) / r.width * DAY);
 });
-$('#cam').onchange = () => { current = null; applyPlayerRotation(); loadDay(); };
+$('#cam').onchange = () => { playStart = null; applyPlayerRotation(); loadDay(); };
 $('#day').onchange = e => { const [y,m,d] = e.target.value.split('-').map(Number); setDay(new Date(y, m-1, d)); };
 $('#prev').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()-1); setDay(d); };
 $('#next').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()+1); setDay(d); };
@@ -560,6 +580,12 @@ async function renderSettings() {
       <div class="frow"><label>Max total GB</label><input id="s_maxgb" type="number" min="0" value="${r.max_gb}"></div>
       <div class="frow"><label>Keep free GB</label><input id="s_free" type="number" min="0" value="${r.min_free_gb}"></div>
       <div class="frow"><button class="btn" id="s_saver">Save retention</button><span class="saved" id="s_rmsg"></span></div>
+    </div>
+    <div class="card">
+      <h3>Cameras</h3>
+      <p class="hint">Per-camera tuning. Rotation applies everywhere (live, snapshots, thumbnails, playback) and syncs across devices. Motion sensitivity 0 = use global (${m.sensitivity}); lower = more sensitive.</p>
+      <div id="camsettings"></div>
+      <p class="hint" style="margin-top:12px">Image settings (brightness, night mode/IR, WDR, encoding bitrate/resolution) live on the NVR and need its HTTP/ISAPI port enabled — not available while that port is closed.</p>
     </div>`;
   const syncNotifierFields = () => {
     const n = $('#s_notifier').value;
@@ -591,6 +617,24 @@ async function renderSettings() {
   };
   $('#s_savem').onclick = () => save({ motion: { sensitivity: +$('#s_sens').value, min_gap_seconds: +$('#s_gap').value, detect: $('#s_detect').checked } }, $('#s_mmsg'));
   $('#s_saver').onclick = () => save({ retention: { max_days: +$('#s_days').value, max_gb: +$('#s_maxgb').value, min_free_gb: +$('#s_free').value } }, $('#s_rmsg'));
+
+  // Per-camera rows
+  const cs = $('#camsettings');
+  for (const c of cfg.settings.cameras) {
+    const row = document.createElement('div'); row.className = 'frow';
+    const rotOpts = [0, 90, 180, 270].map(d => `<option value="${d}"${c.rotation === d ? ' selected' : ''}>${d}°</option>`).join('');
+    row.innerHTML = `
+      <input class="c_name" value="${esc(c.name)}" style="flex:1;min-width:120px" title="Name">
+      <label style="color:var(--muted)">rotate</label><select class="c_rot">${rotOpts}</select>
+      <label style="color:var(--muted)">motion</label><input class="c_sens" type="number" step="0.5" min="0" value="${c.motion_sensitivity}" style="width:74px" title="0 = use global">
+      <button class="btn c_save">Save</button><span class="saved c_msg"></span>`;
+    row.querySelector('.c_save').onclick = () => save({ cameras: { [c.id]: {
+      name: row.querySelector('.c_name').value,
+      rotation: +row.querySelector('.c_rot').value,
+      motion_sensitivity: +row.querySelector('.c_sens').value } } }, row.querySelector('.c_msg'))
+      .then(() => { camRot[c.id] = +row.querySelector('.c_rot').value; });
+    cs.appendChild(row);
+  }
 }
 
 (async () => {

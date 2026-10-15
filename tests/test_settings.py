@@ -68,3 +68,25 @@ def test_current_masks_only_set_secrets(tmp_path):
     assert cur["alerts"]["ntfy_url"] == ""         # unset -> empty, not masked
     cfg.alerts.ntfy_url = "x"
     assert s.current(cfg)["alerts"]["ntfy_url"] == s.MASK
+
+
+def test_per_camera_settings(tmp_path):
+    cfg = parse({"storage_dir": str(tmp_path),
+                 "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"},
+                             {"id": "cam2", "record_url": "r", "live_url": "l"}]})
+    path = s.settings_path(cfg)
+    s.update(cfg, path, {"cameras": {"cam1": {"name": "Front Door", "rotation": 90, "motion_sensitivity": 6}}})
+    assert cfg.camera("cam1").name == "Front Door"
+    assert cfg.camera("cam1").rotation == 90
+    assert cfg.camera("cam1").motion_sensitivity == 6
+    assert cfg.camera("cam2").rotation == 0  # untouched
+    # bad rotation rejected
+    import pytest
+    with pytest.raises(ValueError):
+        s.update(cfg, path, {"cameras": {"cam1": {"rotation": 45}}})
+    # merge: changing only name keeps the saved rotation
+    s.update(cfg, path, {"cameras": {"cam1": {"name": "Porch"}}})
+    cfg2 = parse({"storage_dir": str(tmp_path),
+                  "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    s.apply(cfg2, s.load_overlay(path))
+    assert cfg2.camera("cam1").name == "Porch" and cfg2.camera("cam1").rotation == 90

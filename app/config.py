@@ -50,6 +50,8 @@ class Camera:
     # "none" drops it, "copy" passes it through.
     audio: str = "aac"
     enabled: bool = True
+    rotation: int = 0  # display rotation in degrees: 0/90/180/270
+    motion_sensitivity: float = 0.0  # per-camera override of motion.sensitivity (0 = use global)
 
 
 @dataclass
@@ -146,6 +148,8 @@ def parse(raw: dict) -> Config:
                 live_codec=str(c.get("live_codec", "copy")),
                 audio=str(c.get("audio", "aac")),
                 enabled=bool(c.get("enabled", True)),
+                rotation=int(c.get("rotation", 0)),
+                motion_sensitivity=float(c.get("motion_sensitivity", 0) or 0),
             )
         )
 

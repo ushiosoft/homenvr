@@ -83,11 +83,18 @@ async def probe(url: str, transport: str = "tcp", timeout: float = 20) -> dict:
             "audio": a.get("codec_name") if a else None}
 
 
-async def _ffmpeg_jpeg(args_in: list[str], width: int, timeout: float, skip: int = 0) -> bytes:
+def rotation_vf(deg: int) -> str:
+    """ffmpeg transpose chain for a 0/90/180/270 rotation (empty for 0)."""
+    return {90: "transpose=1", 180: "transpose=1,transpose=1", 270: "transpose=2"}.get(int(deg) % 360, "")
+
+
+async def _ffmpeg_jpeg(args_in: list[str], width: int, timeout: float, skip: int = 0, rot: int = 0) -> bytes:
     sel = f"select='gte(n\\,{skip})'," if skip else ""
+    rv = rotation_vf(rot)
+    vf = f"{sel}{rv + ',' if rv else ''}scale={width}:-2"
     proc = await asyncio.create_subprocess_exec(
         FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", *args_in,
-        "-vf", f"{sel}scale={width}:-2", "-frames:v", "1", "-fps_mode", "passthrough",
+        "-vf", vf, "-frames:v", "1", "-fps_mode", "passthrough",
         "-q:v", "4", "-f", "image2", "-",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
@@ -101,7 +108,7 @@ async def _ffmpeg_jpeg(args_in: list[str], width: int, timeout: float, skip: int
     return out
 
 
-async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: float = 15) -> bytes:
+async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: float = 15, rot: int = 0) -> bytes:
     """Grab a JPEG from the latest on-disk live HLS segment — clean H.264, no extra
     camera connection (a fresh RTSP grab contends with the live worker on the
     wireless sub-stream and returns grey frames). Segments start on a keyframe."""
@@ -116,7 +123,7 @@ async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: f
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(init.read_bytes()); f.write(seg.read_bytes())
-        return await _ffmpeg_jpeg(["-i", tmp], width, timeout)
+        return await _ffmpeg_jpeg(["-i", tmp], width, timeout, rot=rot)
     finally:
         try:
             os.unlink(tmp)
@@ -124,25 +131,26 @@ async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: f
             pass
 
 
-async def snapshot(url: str, transport: str = "tcp", width: int = 640, timeout: float = 15) -> bytes:
+async def snapshot(url: str, transport: str = "tcp", width: int = 640, timeout: float = 15, rot: int = 0) -> bytes:
     """Fallback: grab a frame directly from RTSP (skips HEVC warmup frames)."""
     return await _ffmpeg_jpeg(
-        ["-rtsp_transport", transport, *socket_timeout_args(), "-i", url], width, timeout, skip=20)
+        ["-rtsp_transport", transport, *socket_timeout_args(), "-i", url], width, timeout, skip=20, rot=rot)
 
 
 async def snapshot_camera(cam, cfg, width: int = 640) -> bytes:
     """Prefer the on-disk live segment (clean, no camera contention); fall back to RTSP."""
+    rot = getattr(cam, "rotation", 0)
     try:
-        return await snapshot_from_live(cfg.live_dir, cam.id, width)
+        return await snapshot_from_live(cfg.live_dir, cam.id, width, rot=rot)
     except Exception as e:
         log.debug("[%s] live snapshot failed (%s), trying RTSP", cam.id, e)
-        return await snapshot(cam.live_url, cfg.rtsp_transport, width)
+        return await snapshot(cam.live_url, cfg.rtsp_transport, width, rot=rot)
 
 
-async def thumbnail(path, offset: float, width: int = 320, timeout: float = 15) -> bytes:
+async def thumbnail(path, offset: float, width: int = 320, timeout: float = 15, rot: int = 0) -> bytes:
     """Extract a JPEG from a recording file at `offset` seconds (input-seek to the
     nearest keyframe — fast). Used for playback event thumbnails."""
-    return await _ffmpeg_jpeg(["-ss", f"{max(0.0, offset):.3f}", "-i", str(path)], width, timeout)
+    return await _ffmpeg_jpeg(["-ss", f"{max(0.0, offset):.3f}", "-i", str(path)], width, timeout, rot=rot)
 
 
 def _video_tag(codec: str | None) -> list[str]:
