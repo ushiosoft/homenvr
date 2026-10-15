@@ -29,6 +29,8 @@ SCHEMA = {
         "webhook_url": ("secret_str", None),
         "telegram": ("telegram", None),
         "stale_segment_seconds": ("int", (10, 86400)),
+        "motion_push": ("bool", None),
+        "motion_push_cooldown": ("int", (10, 86400)),
     },
     "motion": {
         "sensitivity": ("float", (0.1, 255.0)),
@@ -48,6 +50,8 @@ def _coerce(kind, bounds, value):
         if value not in bounds:
             raise ValueError(f"must be one of {bounds}")
         return value
+    if kind == "bool":
+        return bool(value)
     if kind == "int":
         v = int(value)
     elif kind == "float":
@@ -101,6 +105,8 @@ def current(cfg: Config) -> dict:
             "telegram": {"bot_token": MASK if tg.get("bot_token") else "",
                          "chat_id": tg.get("chat_id", "")},
             "stale_segment_seconds": a.stale_segment_seconds,
+            "motion_push": a.motion_push,
+            "motion_push_cooldown": a.motion_push_cooldown,
         },
         "motion": {"enabled": m.enabled, "sensitivity": m.sensitivity,
                    "min_gap_seconds": m.min_gap_seconds},

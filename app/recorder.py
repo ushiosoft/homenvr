@@ -83,6 +83,30 @@ async def probe(url: str, transport: str = "tcp", timeout: float = 20) -> dict:
             "audio": a.get("codec_name") if a else None}
 
 
+async def snapshot(url: str, transport: str = "tcp", width: int = 640, timeout: float = 15) -> bytes:
+    """Grab one clean JPEG frame from an RTSP URL (for alert thumbnails).
+
+    Skips the first ~20 decoded frames: HEVC streams often emit warmup/partial
+    frames right after connect (the 'PPS id out of range' artifacts), which
+    produce a near-blank image.
+    """
+    proc = await asyncio.create_subprocess_exec(
+        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error",
+        "-rtsp_transport", transport, *socket_timeout_args(), "-i", url,
+        "-vf", f"select='gte(n\\,20)',scale={width}:-2", "-frames:v", "1",
+        "-fps_mode", "passthrough", "-q:v", "4", "-f", "image2", "-",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill(); await proc.wait()
+        raise RuntimeError("snapshot timed out")
+    if proc.returncode != 0 or not out:
+        raise RuntimeError(redact(err.decode(errors="replace").strip()) or "snapshot failed")
+    return out
+
+
 def _video_tag(codec: str | None) -> list[str]:
     # hvc1 (parameter sets in the sample entry) is what Safari/Chrome expect for HEVC in MP4.
     return ["-tag:v", "hvc1"] if codec == "hevc" else []
@@ -229,6 +253,7 @@ class Supervisor:
         self.motion: dict[str, object] = {}
         self.events = None  # EventStore, set in start() if motion enabled
         self.watchdog = None  # set in _watchdog_loop
+        self._motion_push_at: dict[str, float] = {}
         self._tasks: list[asyncio.Task] = []
 
     def reload_notifier(self) -> None:
@@ -236,6 +261,29 @@ class Supervisor:
         from .alerts import make_notifier
         if self.watchdog is not None:
             self.watchdog.notifier = make_notifier(self.cfg.alerts)
+
+    async def _motion_alert(self, cam_id: str, ts: float, score: float) -> None:
+        """On motion: capture a snapshot and push a notification (throttled per camera)."""
+        a = self.cfg.alerts
+        if not a.motion_push or a.notifier == "none":
+            return
+        last = self._motion_push_at.get(cam_id, 0.0)
+        if ts - last < a.motion_push_cooldown:
+            return
+        self._motion_push_at[cam_id] = ts
+        cam = self.cfg.camera(cam_id)
+        if cam is None:
+            return
+        try:
+            from .alerts import make_notifier
+            img = await snapshot(cam.live_url, self.cfg.rtsp_transport)
+            when = time.strftime("%H:%M:%S", time.localtime(ts))
+            notifier = make_notifier(a)
+            await asyncio.to_thread(notifier.send_image, f"Motion — {cam.name}",
+                                    f"Detected at {when}", img, f"{cam_id}-{int(ts)}.jpg")
+            log.info("[%s] motion push sent", cam_id)
+        except Exception as e:
+            log.warning("[%s] motion push failed: %s", cam_id, redact(str(e)))
 
     async def start(self) -> None:
         if not shutil.which(FFMPEG):
@@ -252,7 +300,7 @@ class Supervisor:
                 self.workers[(cam.id, kind)] = w
                 self._tasks.append(asyncio.create_task(w.run(), name=f"{cam.id}-{kind}"))
             if self.cfg.motion.enabled:
-                md = MotionDetector(cam, self.cfg, self.events)
+                md = MotionDetector(cam, self.cfg, self.events, on_event=self._motion_alert)
                 self.motion[cam.id] = md
                 self._tasks.append(asyncio.create_task(md.run(), name=f"{cam.id}-motion"))
         self._tasks.append(asyncio.create_task(self._retention_loop(), name="retention"))

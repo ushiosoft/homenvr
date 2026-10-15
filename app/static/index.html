@@ -427,6 +427,8 @@ async function renderSettings() {
       <div class="frow nf nf-telegram"><label>Telegram bot token</label><input id="s_tg_token" value="${esc(a.telegram.bot_token)}" placeholder="123456:ABC-..."></div>
       <div class="frow nf nf-telegram"><label>Telegram chat ID</label><input id="s_tg_chat" value="${esc(a.telegram.chat_id)}" placeholder="e.g. 123456789"></div>
       <div class="frow"><label>Alert if stalled (sec)</label><input id="s_stale" type="number" min="10" value="${a.stale_segment_seconds}"></div>
+      <div class="frow"><label>Push motion snapshots</label><input id="s_mpush" type="checkbox" ${a.motion_push ? 'checked' : ''} style="flex:0;width:auto"><span class="hint">send a photo notification when motion is detected</span></div>
+      <div class="frow"><label>Motion push cooldown (sec)</label><input id="s_mcool" type="number" min="10" value="${a.motion_push_cooldown}"></div>
       <div class="frow"><button class="btn" id="s_save">Save alerts</button><button class="btn" id="s_test">Send test alert</button><span class="saved" id="s_amsg"></span></div>
     </div>
     <div class="card">
@@ -462,7 +464,8 @@ async function renderSettings() {
   $('#s_save').onclick = () => save({ alerts: {
     notifier: $('#s_notifier').value, ntfy_url: $('#s_ntfy').value, webhook_url: $('#s_webhook').value,
     telegram: { bot_token: $('#s_tg_token').value, chat_id: $('#s_tg_chat').value },
-    stale_segment_seconds: +$('#s_stale').value } }, $('#s_amsg'));
+    stale_segment_seconds: +$('#s_stale').value,
+    motion_push: $('#s_mpush').checked, motion_push_cooldown: +$('#s_mcool').value } }, $('#s_amsg'));
   $('#s_test').onclick = async () => {
     const el = $('#s_amsg'); el.textContent = 'sending…'; el.style.color = '';
     try { const r = await fetch('api/alerts/test', { method: 'POST' }); const j = await r.json();

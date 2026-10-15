@@ -79,3 +79,32 @@ def test_observer_flags_down_stale_and_disk(tmp_path):
     checks = {c.key: c for c in observe(now + 500)}
     assert checks["camera cam1"].ok is False
     assert "no new data" in checks["camera cam1"].message
+
+
+def test_send_image_multipart_and_ntfy():
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from app.alerts import WebhookNotifier, NtfyNotifier
+    cap = {}
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get('Content-Length', 0))
+            cap['body'] = self.rfile.read(n)
+            cap['ct'] = self.headers.get('Content-Type')
+            cap['ua'] = self.headers.get('User-Agent')
+            cap['title'] = self.headers.get('Title')
+            self.send_response(204); self.end_headers()
+        def log_message(self, *a): pass
+    srv = HTTPServer(("127.0.0.1", 0), H); port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    img = b"\xff\xd8\xff" + b"JPEGDATA" + b"\xff\xd9"
+
+    WebhookNotifier(f"http://127.0.0.1:{port}/wh").send_image("Motion", "cam1", img, "s.jpg")
+    assert cap['ct'].startswith("multipart/form-data; boundary=")
+    assert b'name="payload_json"' in cap['body'] and b'name="files[0]"' in cap['body']
+    assert img in cap['body'] and cap['ua'].startswith("homenvr/")
+
+    WebhookNotifier(f"http://127.0.0.1:{port}/wh")  # reset not needed
+    NtfyNotifier(f"http://127.0.0.1:{port}/topic").send_image("Motion", "cam1", img, "s.jpg")
+    assert cap['body'] == img and cap['title'] == "Motion"  # ntfy sends raw image body
+    srv.shutdown()

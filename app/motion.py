@@ -42,12 +42,14 @@ def motion_cmd(cam: Camera, cfg: Config) -> list[str]:
 class MotionDetector:
     """Supervised per-camera motion analyzer with backoff restart."""
 
-    def __init__(self, cam: Camera, cfg: Config, store: EventStore):
+    def __init__(self, cam: Camera, cfg: Config, store: EventStore, on_event=None):
         self.cam, self.cfg, self.store = cam, cfg, store
+        self.on_event = on_event  # optional async callback(camera_id, ts, score)
         self._stopping = False
         self._proc: asyncio.subprocess.Process | None = None
         self.last_event_ts = 0.0
         self.events = 0
+        self._loop = None
 
     def _record(self, score: float, now: float | None = None) -> bool:
         """Debounce: only one event per min_gap_seconds window. Returns True if stored."""
@@ -57,9 +59,13 @@ class MotionDetector:
         self.last_event_ts = now
         self.store.add(self.cam.id, now, "motion", score)
         self.events += 1
+        if self.on_event and self._loop:
+            self._loop.call_soon_threadsafe(
+                lambda: asyncio.ensure_future(self.on_event(self.cam.id, now, score)))
         return True
 
     async def run(self) -> None:
+        self._loop = asyncio.get_running_loop()
         backoff = 2.0
         while not self._stopping:
             t0 = time.monotonic()

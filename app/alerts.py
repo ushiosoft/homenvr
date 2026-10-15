@@ -32,9 +32,27 @@ def _post(url: str, data: bytes, extra: dict | None = None):
     urllib.request.urlopen(req, timeout=TIMEOUT).close()
 
 
+def _multipart(fields: dict, files: dict) -> tuple[bytes, str]:
+    """Build a multipart/form-data body. files: {name: (filename, bytes, content_type)}."""
+    import uuid
+    boundary = "----homenvr" + uuid.uuid4().hex
+    buf = bytearray()
+    for k, v in fields.items():
+        buf += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n".encode()
+    for name, (fn, content, ctype) in files.items():
+        buf += f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{fn}\"\r\n".encode()
+        buf += f"Content-Type: {ctype}\r\n\r\n".encode() + content + b"\r\n"
+    buf += f"--{boundary}--\r\n".encode()
+    return bytes(buf), f"multipart/form-data; boundary={boundary}"
+
+
 class Notifier:
     def send(self, title: str, message: str, *, failing: bool) -> None:
         raise NotImplementedError
+
+    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg") -> None:
+        """Send with an image attachment. Default: fall back to text-only."""
+        self.send(title, message, failing=False)
 
 
 class NullNotifier(Notifier):
@@ -53,6 +71,11 @@ class NtfyNotifier(Notifier):
             "Title": title, "Priority": "high" if failing else "default",
             "Tags": "rotating_light" if failing else "white_check_mark"})
 
+    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg") -> None:
+        # ntfy: raw image body with Title/Message/Filename headers.
+        _post(self.url, image, {"Title": title, "Message": message,
+                                "Filename": filename, "Content-Type": "image/jpeg"})
+
 
 class WebhookNotifier(Notifier):
     """Posts JSON {text: ...} — compatible with Slack/Discord/Mattermost webhooks."""
@@ -66,6 +89,13 @@ class WebhookNotifier(Notifier):
                            "content": f"{icon} **{title}**\n{message}"}).encode()
         _post(self.url, body, {"Content-Type": "application/json"})
 
+    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg") -> None:
+        # Discord webhook: multipart with payload_json + file attachment.
+        payload = json.dumps({"content": f"📸 **{title}**\n{message}"})
+        body, ctype = _multipart({"payload_json": payload},
+                                 {"files[0]": (filename, image, "image/jpeg")})
+        _post(self.url, body, {"Content-Type": ctype})
+
 
 class TelegramNotifier(Notifier):
     def __init__(self, bot_token: str, chat_id: str):
@@ -78,6 +108,12 @@ class TelegramNotifier(Notifier):
                            "parse_mode": "Markdown"}).encode()
         _post(f"https://api.telegram.org/bot{self.token}/sendMessage",
               data, {"Content-Type": "application/json"})
+
+    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg") -> None:
+        # Telegram sendPhoto: multipart with photo file + caption.
+        body, ctype = _multipart({"chat_id": self.chat_id, "caption": f"📸 {title}\n{message}"},
+                                 {"photo": (filename, image, "image/jpeg")})
+        _post(f"https://api.telegram.org/bot{self.token}/sendPhoto", body, {"Content-Type": ctype})
 
 
 class SmtpNotifier(Notifier):

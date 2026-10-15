@@ -40,3 +40,5 @@ alerts:                # notify when a camera stops recording / disk fills
   # telegram: {bot_token: "123:ABC", chat_id: "123456789"}  # notifier: telegram
   # smtp: {host: smtp.example.com, port: 587, user: you, password: pw, to: you@example.com}
   stale_segment_seconds: 180   # alert if recording but no new data this long
+  motion_push: false           # push a camera snapshot when motion is detected
+  motion_push_cooldown: 300    # min seconds between motion pushes per camera
