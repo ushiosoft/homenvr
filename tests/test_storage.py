@@ -69,3 +69,14 @@ def test_concat_list_trims(tmp_path):
     script = s.concat_list("cam1", base + 500, base + 700)
     assert script.count("file '") == 2
     assert "inpoint 500.000" in script and "outpoint 100.000" in script
+
+
+def test_span_fast_first_last(tmp_path):
+    s = Storage(tmp_path)
+    base = 1760500000
+    make(tmp_path, "cam1", base, 600)
+    make(tmp_path, "cam1", base + 1200, 600)
+    first, last = s.span("cam1")
+    assert first == base
+    assert last == base + 1200 + 600       # newest start + its duration (from mtime)
+    assert s.span("empty") == (None, None)

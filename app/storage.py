@@ -19,6 +19,10 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 STAMP_FMT = "%Y%m%dT%H%M%SZ"
+# Reserved top-level folders under storage_dir that are not cameras.
+GRACE_DIR = "grace"
+SAVED_DIR = "saved"
+RESERVED_DIRS = {GRACE_DIR, SAVED_DIR}
 # Same thing in ffmpeg strftime syntax (ffmpeg runs with TZ=UTC).
 FFMPEG_PATTERN = "%Y%m%dT%H%M%SZ.mp4"
 
@@ -84,10 +88,34 @@ class Storage:
         out.sort(key=lambda x: x.start)
         return out
 
+    def span(self, camera: str) -> tuple[float | None, float | None]:
+        """(first_start, last_end) for a camera without statting every file.
+
+        Filenames are start timestamps, so first/last come from the name min/max;
+        only the newest file is statted (its mtime = media end). O(1) stats.
+        """
+        d = self.root / camera
+        if not d.is_dir():
+            return (None, None)
+        stamps = sorted(
+            s for s in (parse_stamp(e.name) for e in os.scandir(d) if e.name.endswith(".mp4"))
+            if s is not None
+        )
+        if not stamps:
+            return (None, None)
+        last_name = format_stamp(stamps[-1]) + ".mp4"
+        try:
+            last = max(stamps[-1], (d / last_name).stat().st_mtime)
+        except OSError:
+            last = stamps[-1]
+        return (stamps[0], last)
+
     def cameras_on_disk(self) -> list[str]:
         if not self.root.is_dir():
             return []
-        return sorted(e.name for e in os.scandir(self.root) if e.is_dir())
+        # Only real camera dirs — skip the reserved grace/ and saved/ folders.
+        return sorted(e.name for e in os.scandir(self.root)
+                      if e.is_dir() and e.name not in RESERVED_DIRS)
 
     def usage(self) -> dict:
         total = sum(s.size for c in self.cameras_on_disk() for s in self.segments(c))

@@ -54,10 +54,19 @@
   .frow label { width:170px; color:var(--muted); }
   .frow input, .frow select { flex:1; min-width:140px; }
   .saved { color:var(--rec); font-size:12px; margin-left:8px; }
+  #loading { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column; gap:14px;
+             align-items:center; justify-content:center; background:var(--bg); transition:opacity .3s; }
+  #loading.gone { opacity:0; pointer-events:none; }
+  .spinner { width:38px; height:38px; border:3px solid var(--line); border-top-color:var(--accent);
+             border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  #loading .lmsg { color:var(--muted); font-size:13px; }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration:2s; } }
   .hidden { display:none; }
 </style>
 </head>
 <body>
+<div id="loading"><div class="spinner"></div><span class="lmsg">Loading cameras…</span></div>
 <header>
   <h1>homenvr</h1>
   <nav><button id="tab-live" class="on">Live</button><button id="tab-play">Playback</button><button id="tab-settings">Settings</button></nav>
@@ -375,9 +384,16 @@ async function renderSettings() {
 }
 
 (async () => {
-  await loadCameras();
-  $('#cam').innerHTML = cameras.map(c => `<option value="${c.id}">${c.name.replace(/</g,'&lt;')}</option>`).join('');
-  tab('live');
+  try {
+    await loadCameras();
+    $('#cam').innerHTML = cameras.map(c => `<option value="${c.id}">${c.name.replace(/</g,'&lt;')}</option>`).join('');
+    tab('live');
+    const l = $('#loading'); l.classList.add('gone'); setTimeout(() => l.classList.add('hidden'), 400);
+  } catch (e) {
+    $('#loading').querySelector('.lmsg').textContent = 'Failed to load (' + e.message + '). Retrying…';
+    setTimeout(() => location.reload(), 4000);
+    return;
+  }
   setInterval(async () => { if (!$('#live').classList.contains('hidden')) { await loadCameras(); updateStatus(); } }, 10000);
 })();
 </script>

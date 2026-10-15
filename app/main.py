@@ -72,12 +72,12 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     async def cameras():
         out = []
         for c in cfg.cameras:
-            segs = await asyncio.to_thread(storage.segments, c.id)
+            first, last = await asyncio.to_thread(storage.span, c.id)
             out.append({
                 "id": c.id, "name": c.name, "channel": c.channel, "enabled": c.enabled,
                 "status": sup.status(c.id),
-                "first": segs[0].start if segs else None,
-                "last": segs[-1].end if segs else None,
+                "first": first,
+                "last": last,
                 "live": f"live/{c.id}/index.m3u8",
             })
         return out
