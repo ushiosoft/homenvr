@@ -19,6 +19,17 @@ from .config import Alerts
 log = logging.getLogger(__name__)
 
 TIMEOUT = 10
+# Discord/Cloudflare reject the default "Python-urllib/*" UA with HTTP 403 (error
+# 1010), so every notifier HTTP request sends a real User-Agent.
+USER_AGENT = "homenvr/1.0 (+https://github.com/morluto/rea)"
+
+
+def _post(url: str, data: bytes, extra: dict | None = None):
+    headers = {"User-Agent": USER_AGENT}
+    if extra:
+        headers.update(extra)
+    req = urllib.request.Request(url, data=data, headers=headers)
+    urllib.request.urlopen(req, timeout=TIMEOUT).close()
 
 
 class Notifier:
@@ -38,12 +49,9 @@ class NtfyNotifier(Notifier):
         self.url = url
 
     def send(self, title: str, message: str, *, failing: bool) -> None:
-        req = urllib.request.Request(
-            self.url, data=message.encode(),
-            headers={"Title": title, "Priority": "high" if failing else "default",
-                     "Tags": "rotating_light" if failing else "white_check_mark"},
-        )
-        urllib.request.urlopen(req, timeout=TIMEOUT).close()
+        _post(self.url, message.encode(), {
+            "Title": title, "Priority": "high" if failing else "default",
+            "Tags": "rotating_light" if failing else "white_check_mark"})
 
 
 class WebhookNotifier(Notifier):
@@ -56,9 +64,7 @@ class WebhookNotifier(Notifier):
         icon = "🔴" if failing else "🟢"
         body = json.dumps({"text": f"{icon} *{title}*\n{message}",
                            "content": f"{icon} **{title}**\n{message}"}).encode()
-        req = urllib.request.Request(self.url, data=body,
-                                     headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=TIMEOUT).close()
+        _post(self.url, body, {"Content-Type": "application/json"})
 
 
 class TelegramNotifier(Notifier):
@@ -70,10 +76,8 @@ class TelegramNotifier(Notifier):
         data = json.dumps({"chat_id": self.chat_id,
                            "text": f"{icon} *{title}*\n{message}",
                            "parse_mode": "Markdown"}).encode()
-        req = urllib.request.Request(
-            f"https://api.telegram.org/bot{self.token}/sendMessage",
-            data=data, headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(req, timeout=TIMEOUT).close()
+        _post(f"https://api.telegram.org/bot{self.token}/sendMessage",
+              data, {"Content-Type": "application/json"})
 
 
 class SmtpNotifier(Notifier):
