@@ -33,24 +33,26 @@ def test_segments_filter_and_order(tmp_path):
     assert s.segments("nope") == []
 
 
-def test_retention_by_age_protects_newest(tmp_path):
+def test_expire_by_age_protects_newest(tmp_path):
+    # Expiry moves to grace (not delete); the newest per camera is protected.
     s = Storage(tmp_path)
     now = time.time()
     old = make(tmp_path, "cam1", now - 10 * 86400, 600)
-    newest_but_old = make(tmp_path, "cam2", now - 10 * 86400, 600)
+    newest_but_old = make(tmp_path, "cam2", now - 10 * 86400, 600)  # sole seg -> protected
     keep = make(tmp_path, "cam1", now - 600, 600)
-    deleted = s.enforce_retention(max_gb=0, max_days=5, min_free_gb=0, now=now)
-    assert deleted == [old]
-    assert keep.exists() and newest_but_old.exists()
+    moved = s.expire(max_gb=0, max_days=5, now=now)
+    assert moved == [tmp_path / "grace" / "cam1" / old.name]
+    assert not old.exists() and keep.exists() and newest_but_old.exists()
 
 
-def test_retention_by_size(tmp_path):
+def test_expire_by_size(tmp_path):
     s = Storage(tmp_path)
     now = time.time()
     paths = [make(tmp_path, "cam1", now - (10 - i) * 600, 600, size=400 * 1024**2) for i in range(5)]
-    # 5 * 400 MiB = ~1.95 GiB; cap at 1 GiB -> delete the 3 oldest
-    deleted = s.enforce_retention(max_gb=1, max_days=0, min_free_gb=0, now=now)
-    assert deleted == paths[:3]
+    # 5 * 400 MiB = ~1.95 GiB active; cap at 1 GiB -> move the 3 oldest to grace
+    moved = s.expire(max_gb=1, max_days=0, now=now)
+    assert [p.name for p in moved] == [p.name for p in paths[:3]]
+    assert len(s.grace_segments()) == 3
 
 
 def test_resolve_rejects_traversal(tmp_path):

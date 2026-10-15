@@ -19,7 +19,6 @@
   @media (max-width:480px) { .grid { grid-template-columns:1fr; } }
   .tile { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
   .vwrap { position:relative; overflow:hidden; aspect-ratio:16/9; background:#000; }
-  .vwrap.tall { aspect-ratio:9/16; }
   .vwrap video { width:100%; height:100%; object-fit:contain; display:block; transform-origin:center center; will-change:transform; }
   .vwrap.zoomed video { cursor:grab; touch-action:none; }
   .vwrap.zoomed video:active { cursor:grabbing; }
@@ -76,7 +75,7 @@
 <div id="loading"><div class="spinner"></div><span class="lmsg">Loading cameras…</span></div>
 <header>
   <h1>homenvr</h1>
-  <nav><button id="tab-live" class="on">Live</button><button id="tab-play">Playback</button><button id="tab-settings">Settings</button></nav>
+  <nav><button id="tab-live" class="on">Live</button><button id="tab-play">Playback</button><button id="tab-saved">Saved</button><button id="tab-settings">Settings</button></nav>
   <span id="usage"></span>
 </header>
 <main>
@@ -92,12 +91,14 @@
       <button class="btn" id="zoutPlay" title="Zoom out">－</button>
       <button class="btn" id="rotPlay" title="Rotate view">⟳ rotate</button>
       <span style="flex:1"></span>
-      <label>Export <input id="exlen" type="number" value="60" min="1" max="360" style="width:64px"> s from cursor</label>
-      <button class="btn" id="export">Download clip</button>
+      <label><input id="exlen" type="number" value="60" min="1" max="360" style="width:64px"> s from cursor</label>
+      <button class="btn" id="export">⬇ Download</button>
+      <button class="btn" id="keep" title="Save permanently (never auto-deleted)">★ Keep</button>
     </div>
     <div id="playerWrap"><video id="player" controls playsinline muted></video></div>
     <div id="timeline"></div>
   </section>
+  <section id="saved" class="hidden"></section>
   <section id="settings" class="hidden"></section>
 </main>
 <script src="hls.min.js"></script>
@@ -145,8 +146,10 @@ function attach(video, src) {
 async function loadCameras() {
   cameras = await api('api/cameras');
   const st = await api('api/status');
-  const r = st.retention;
-  $('#usage').textContent = `${fmtBytes(st.storage.recordings_bytes)} recorded · ${fmtBytes(st.storage.disk_free_bytes)} free · keep ${r.max_days || '∞'} d / ${r.max_gb || '∞'} GB`;
+  const r = st.retention, s = st.storage;
+  const grace = s.grace_bytes ? ` · ${fmtBytes(s.grace_bytes)} grace` : '';
+  const saved = s.saved_bytes ? ` · ${fmtBytes(s.saved_bytes)} saved` : '';
+  $('#usage').textContent = `${fmtBytes(s.recordings_bytes)} recorded${grace}${saved} · ${fmtBytes(s.disk_free_bytes)} free · keep ${r.max_days || '∞'} d / ${r.max_gb || '∞'} GB`;
 }
 
 // ---- rotate / zoom / pan transform engine (mouse + touch) ----
@@ -154,27 +157,20 @@ const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 function getRot(id) { try { return +localStorage.getItem('rot.' + id) || 0; } catch { return 0; } }
 function saveRot(id, deg) { try { localStorage.setItem('rot.' + id, deg); } catch {} }
 
-// When rotated 90/270, size the (landscape) video to the wrap's swapped dims so the
-// upright portrait image FILLS the tile instead of being letterboxed twice.
-function fitRotated(video) {
-  const wrap = video.closest('.vwrap, #playerWrap'); if (!wrap) return;
-  const x = video._xf;
-  if (x && x.rot % 180 !== 0) {
-    video.style.width = wrap.clientHeight + 'px';
-    video.style.height = wrap.clientWidth + 'px';
-  } else {
-    video.style.width = ''; video.style.height = '';
-  }
+// When rotated 90/270, scale the video down so the upright (portrait) image fits
+// inside the SAME 16:9 tile, pillarboxed — keeps the grid uniform (no giant tiles).
+// The fit factor is the container's height/width (9/16 for a 16:9 tile).
+function rotFit(video) {
+  const x = video._xf, wrap = video.closest('.vwrap, #playerWrap');
+  if (!x || x.rot % 180 === 0 || !wrap || !wrap.clientWidth) return 1;
+  return wrap.clientHeight / wrap.clientWidth;
 }
 function applyXform(video) {
   const x = video._xf || (video._xf = { zoom: 1, px: 0, py: 0, rot: 0 });
   const wrap = video.closest('.vwrap, #playerWrap');
-  if (wrap) {
-    wrap.classList.toggle('zoomed', x.zoom > 1);
-    wrap.classList.toggle('tall', x.rot % 180 !== 0);
-  }
-  fitRotated(video);
-  video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${x.zoom}) rotate(${x.rot}deg)`;
+  if (wrap) wrap.classList.toggle('zoomed', x.zoom > 1);
+  const s = x.zoom * rotFit(video);
+  video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${s}) rotate(${x.rot}deg)`;
 }
 function zoomBy(video, factor) {
   const x = video._xf, prev = x.zoom;
@@ -187,7 +183,7 @@ function makeInteractive(video, id) {
   const x = video._xf = { zoom: 1, px: 0, py: 0, rot: id ? getRot(id) : 0 };
   applyXform(video);
   const wrap = video.closest('.vwrap, #playerWrap');
-  if (wrap && window.ResizeObserver) new ResizeObserver(() => fitRotated(video)).observe(wrap);
+  if (wrap && window.ResizeObserver) new ResizeObserver(() => applyXform(video)).observe(wrap);
   // Mouse wheel zoom (desktop)
   video.addEventListener('wheel', e => { e.preventDefault(); zoomBy(video, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
   // Pointer drag to pan (zoomed) + two-finger pinch zoom (touch)
@@ -352,19 +348,64 @@ $('#export').onclick = () => {
   const t = playheadTime(); if (!t) return alert('Click the timeline to pick a start point first.');
   location.href = `api/cameras/${$('#cam').value}/export?start=${t}&end=${t + Number($('#exlen').value || 60)}`;
 };
+$('#keep').onclick = async () => {
+  const t = playheadTime(); if (!t) return alert('Click the timeline (or jump to a motion event) to pick a start point first.');
+  const name = prompt('Name this saved clip (optional):', '');
+  if (name === null) return;
+  const len = Number($('#exlen').value || 60);
+  const btn = $('#keep'); btn.disabled = true; btn.textContent = '★ Saving…';
+  try {
+    const r = await fetch(`api/cameras/${$('#cam').value}/save`, { method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ start: t, end: t + len, name }) });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 120));
+    const j = await r.json();
+    btn.textContent = '★ Saved ✓';
+    loadCameras();  // refresh storage breakdown
+  } catch (e) { alert('Save failed: ' + e.message); }
+  finally { setTimeout(() => { btn.disabled = false; btn.textContent = '★ Keep'; }, 2500); }
+};
+
+async function renderSaved() {
+  const root = $('#saved');
+  root.innerHTML = '<p class="hint">Loading…</p>';
+  let clips;
+  try { clips = await api('api/saved'); } catch { root.innerHTML = '<p class="hint">Failed to load.</p>'; return; }
+  if (!clips.length) { root.innerHTML = '<div class="card"><h3>Saved clips</h3><p class="hint">None yet. In Playback, pick a point (or jump to a motion event) and press <b>★ Keep</b>. Saved clips are never auto-deleted.</p></div>'; return; }
+  root.innerHTML = `<div class="card"><h3>Saved clips (${clips.length})</h3>
+    <p class="hint">Permanent — excluded from retention. Total ${fmtBytes(clips.reduce((a, c) => a + c.size, 0))}.</p>
+    <div id="savedlist"></div></div>`;
+  const list = $('#savedlist');
+  for (const c of clips) {
+    const row = document.createElement('div'); row.className = 'frow';
+    row.innerHTML = `<b style="flex:1;min-width:200px">${esc(c.name)}</b>
+      <span class="hint">${fmtBytes(c.size)} · ${new Date(c.ctime * 1000).toLocaleString()}</span>
+      <a class="btn" href="saved/${encodeURIComponent(c.name)}" target="_blank">▶ Open</a>
+      <a class="btn" href="saved/${encodeURIComponent(c.name)}" download>⬇</a>
+      <button class="btn del">🗑</button>`;
+    row.querySelector('.del').onclick = async () => {
+      if (!confirm('Delete saved clip ' + c.name + '?')) return;
+      await fetch('api/saved/' + encodeURIComponent(c.name), { method: 'DELETE' });
+      renderSaved(); loadCameras();
+    };
+    list.appendChild(row);
+  }
+}
 
 function tab(name) {
-  for (const n of ['live', 'play', 'settings']) {
+  for (const n of ['live', 'play', 'saved', 'settings']) {
     $('#tab-' + n).classList.toggle('on', name === n);
     $('#' + n).classList.toggle('hidden', name !== n);
   }
   if (name === 'live') renderLive();
   else { hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = []; document.querySelectorAll('#live video').forEach(v => v.removeAttribute('src')); }
   if (name === 'play') { if (!dayStart) { const d = new Date(); d.setHours(0,0,0,0); setDay(d); } applyPlayerRotation(); }
+  if (name === 'saved') renderSaved();
   if (name === 'settings') renderSettings();
 }
 $('#tab-live').onclick = () => tab('live');
 $('#tab-play').onclick = () => tab('play');
+$('#tab-saved').onclick = () => tab('saved');
 $('#tab-settings').onclick = () => tab('settings');
 
 // ---- settings page ----

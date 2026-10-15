@@ -174,8 +174,13 @@ def build_observer(cfg, supervisor, storage):
         free = shutil.disk_usage(storage.root).free
         min_free = cfg.retention.min_free_gb * 1024**3
         if min_free > 0 and free < min_free:
-            checks.append(Check("disk space", False,
-                                f"only {free / 1024**3:.1f} GB free (min {cfg.retention.min_free_gb})"))
+            msg = f"only {free / 1024**3:.1f} GB free (min {cfg.retention.min_free_gb})"
+            # If there's nothing left in grace to auto-delete, saved clips may be the cause.
+            if not storage.grace_segments():
+                saved_gb = storage.saved_bytes() / 1024**3
+                if saved_gb > 1:
+                    msg += f"; grace empty, {saved_gb:.1f} GB in saved/ (never auto-deleted) — free space manually"
+            checks.append(Check("disk space", False, msg))
         else:
             checks.append(Check("disk space", True, f"{free / 1024**3:.1f} GB free"))
         return checks

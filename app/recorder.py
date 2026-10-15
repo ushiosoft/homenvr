@@ -259,10 +259,11 @@ class Supervisor:
         self._tasks.append(asyncio.create_task(self._watchdog_loop(), name="watchdog"))
 
     async def _retention_loop(self) -> None:
-        r = self.cfg.retention
         while True:
             try:
-                await asyncio.to_thread(self.storage.enforce_retention, r.max_gb, r.max_days, r.min_free_gb)
+                r = self.cfg.retention  # re-read each cycle so settings changes apply live
+                await asyncio.to_thread(self.storage.run_retention, r.max_gb, r.max_days,
+                                        r.min_free_gb, r.reclaim_headroom_gb)
                 if self.events is not None and r.max_days > 0:
                     await asyncio.to_thread(self.events.prune, time.time() - r.max_days * 86400)
             except Exception:

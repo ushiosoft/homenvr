@@ -54,9 +54,10 @@ class Camera:
 
 @dataclass
 class Retention:
-    max_gb: float = 0.0  # 0 = unlimited
-    max_days: float = 30.0  # 0 = unlimited
-    min_free_gb: float = 5.0
+    max_gb: float = 0.0  # 0 = unlimited; active footage past this moves to grace
+    max_days: float = 30.0  # 0 = unlimited; active footage older than this moves to grace
+    min_free_gb: float = 5.0  # grace is hard-deleted only when free disk drops below this
+    reclaim_headroom_gb: float = 5.0  # when reclaiming, free this much past min_free, then stop
 
 
 @dataclass
@@ -157,6 +158,7 @@ def parse(raw: dict) -> Config:
             max_gb=float(r.get("max_gb", 0) or 0),
             max_days=float(r.get("max_days", 30) or 0),
             min_free_gb=float(r.get("min_free_gb", 5) or 0),
+            reclaim_headroom_gb=float(r.get("reclaim_headroom_gb", 5) or 0),
         ),
         cameras=cams,
         source=src,

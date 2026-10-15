@@ -61,9 +61,13 @@ class Storage:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def segments(self, camera: str, start: float | None = None, end: float | None = None) -> list[Segment]:
-        """Segments for a camera overlapping [start, end), oldest first."""
-        d = self.root / camera
+    def segments(self, camera: str, start: float | None = None, end: float | None = None,
+                 root: Path | None = None) -> list[Segment]:
+        """Segments for a camera overlapping [start, end), oldest first.
+
+        `root` scans an alternate base (e.g. the grace/ dir) instead of the main root.
+        """
+        d = (root or self.root) / camera
         if not d.is_dir():
             return []
         out: list[Segment] = []
@@ -118,9 +122,12 @@ class Storage:
                       if e.is_dir() and e.name not in RESERVED_DIRS)
 
     def usage(self) -> dict:
-        total = sum(s.size for c in self.cameras_on_disk() for s in self.segments(c))
+        active = sum(s.size for c in self.cameras_on_disk() for s in self.segments(c))
+        grace = self._bytes(self.grace_segments())
+        saved = self.saved_bytes()
         du = shutil.disk_usage(self.root)
-        return {"recordings_bytes": total, "disk_total_bytes": du.total, "disk_free_bytes": du.free}
+        return {"recordings_bytes": active, "grace_bytes": grace, "saved_bytes": saved,
+                "disk_total_bytes": du.total, "disk_free_bytes": du.free}
 
     def resolve(self, camera: str, name: str) -> Path | None:
         """Safe lookup of a segment file by name (no path traversal)."""
@@ -129,51 +136,115 @@ class Storage:
         p = self.root / camera / name
         return p if p.is_file() else None
 
-    # ---- retention -------------------------------------------------------
+    # ---- grace + saved locations ----------------------------------------
 
-    def enforce_retention(self, max_gb: float, max_days: float, min_free_gb: float, now: float | None = None) -> list[Path]:
-        """Delete oldest segments until all limits hold. Returns deleted paths.
+    def grace_dir(self, camera: str) -> Path:
+        d = self.root / GRACE_DIR / camera
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
-        The newest segment of each camera is never deleted because the
-        recorder may still be writing it.
-        """
+    def saved_dir(self) -> Path:
+        d = self.root / SAVED_DIR
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def grace_segments(self) -> list[Segment]:
+        """All segments currently in grace (pending deletion), oldest first."""
+        base = self.root / GRACE_DIR
+        if not base.is_dir():
+            return []
+        out: list[Segment] = []
+        for camdir in os.scandir(base):
+            if not camdir.is_dir():
+                continue
+            for seg in self.segments(camdir.name, root=base):
+                out.append(seg)
+        out.sort(key=lambda s: s.start)
+        return out
+
+    def saved_bytes(self) -> int:
+        d = self.root / SAVED_DIR
+        if not d.is_dir():
+            return 0
+        return sum(e.stat().st_size for e in os.scandir(d) if e.is_file())
+
+    def _bytes(self, segs: list[Segment]) -> int:
+        return sum(s.size for s in segs)
+
+    # ---- two-stage retention --------------------------------------------
+    #
+    # Stage 1 "expire": active segments past max_days or max_gb are MOVED to
+    # grace/ (cheap rename, reversible, no data loss). Runs continuously.
+    # Stage 2 "reclaim": grace is hard-DELETED only under real disk pressure
+    # (free < min_free_gb), oldest first, in one batch down to a headroom
+    # cushion, then stops. No constant trickle deletion.
+    # saved/ is never touched by either stage.
+
+    def expire(self, max_gb: float, max_days: float, now: float | None = None) -> list[Path]:
         now = now or time.time()
-        all_segs: list[Segment] = []
-        for cam in self.cameras_on_disk():
-            segs = self.segments(cam)
-            all_segs.extend(segs[:-1])  # protect newest
-        all_segs.sort(key=lambda s: s.start)
-
-        total = sum(s.size for c in self.cameras_on_disk() for s in self.segments(c))
-        free = shutil.disk_usage(self.root).free
-        max_bytes = max_gb * 1024**3 if max_gb > 0 else None
-        min_free = min_free_gb * 1024**3 if min_free_gb > 0 else None
         cutoff = now - max_days * 86400 if max_days > 0 else None
+        max_bytes = max_gb * 1024**3 if max_gb > 0 else None
 
-        deleted: list[Path] = []
-        for seg in all_segs:
+        active: list[Segment] = []
+        for cam in self.cameras_on_disk():
+            active.extend(self.segments(cam)[:-1])  # protect newest (being written)
+        active.sort(key=lambda s: s.start)
+        total = sum(self._bytes(self.segments(c)) for c in self.cameras_on_disk())
+
+        moved: list[Path] = []
+        for seg in active:
             too_old = cutoff is not None and seg.end < cutoff
             too_big = max_bytes is not None and total > max_bytes
-            too_full = min_free is not None and free < min_free
-            if not (too_old or too_big or too_full):
-                break  # sorted oldest-first, so nothing later qualifies by age either
+            if not (too_old or too_big):
+                break
+            dst = self.grace_dir(seg.camera) / seg.path.name
+            try:
+                os.replace(seg.path, dst)  # atomic within the same filesystem
+            except OSError:
+                continue
+            total -= seg.size
+            moved.append(dst)
+        if moved:
+            log.info("retention: moved %d segments to grace", len(moved))
+        return moved
+
+    def reclaim(self, min_free_gb: float, headroom_gb: float = 5.0, now: float | None = None) -> list[Path]:
+        if min_free_gb <= 0:
+            return []
+        free = shutil.disk_usage(self.root).free
+        min_free = min_free_gb * 1024**3
+        if free >= min_free:
+            return []  # no pressure -> do nothing (no constant deletion)
+        target = min_free + headroom_gb * 1024**3  # hysteresis: recover past the line
+        deleted: list[Path] = []
+        for seg in self.grace_segments():  # oldest grace first
+            if free >= target:
+                break
             try:
                 seg.path.unlink()
             except FileNotFoundError:
                 continue
-            total -= seg.size
             free += seg.size
             deleted.append(seg.path)
         if deleted:
-            log.info("retention: deleted %d segments", len(deleted))
+            log.warning("retention: disk pressure, deleted %d grace segments", len(deleted))
         return deleted
+
+    def run_retention(self, max_gb: float, max_days: float, min_free_gb: float,
+                      headroom_gb: float = 5.0, now: float | None = None) -> dict:
+        now = now or time.time()
+        moved = self.expire(max_gb, max_days, now)
+        deleted = self.reclaim(min_free_gb, headroom_gb, now)
+        return {"moved_to_grace": len(moved), "deleted": len(deleted)}
 
     # ---- export ----------------------------------------------------------
 
     def concat_list(self, camera: str, start: float, end: float) -> str:
-        """ffmpeg concat-demuxer script covering [start, end)."""
+        """ffmpeg concat-demuxer script covering [start, end), active + grace."""
         lines = ["ffconcat version 1.0"]
-        for seg in self.segments(camera, start, end):
+        segs = self.segments(camera, start, end)
+        segs += self.segments(camera, start, end, root=self.root / GRACE_DIR)
+        for seg in sorted(segs, key=lambda s: s.start):
             lines.append(f"file '{seg.path.as_posix()}'")
             if start > seg.start:
                 lines.append(f"inpoint {start - seg.start:.3f}")
