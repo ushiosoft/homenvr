@@ -5,3 +5,4 @@ __pycache__/
 *.pyc
 .pytest_cache/
 app/static/hls.min.js
+samples/
