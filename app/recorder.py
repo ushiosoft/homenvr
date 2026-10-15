@@ -153,6 +153,51 @@ async def thumbnail(path, offset: float, width: int = 320, timeout: float = 15, 
     return await _ffmpeg_jpeg(["-ss", f"{max(0.0, offset):.3f}", "-i", str(path)], width, timeout, rot=rot)
 
 
+_codec_cache: dict[str, str | None] = {}
+
+
+async def probe_file_codec(path: str) -> str | None:
+    """Video codec of a recording file (cached per camera directory: a camera's
+    recordings share one codec)."""
+    key = str(Path(path).parent)
+    if key not in _codec_cache:
+        proc = await asyncio.create_subprocess_exec(
+            FFPROBE, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name",
+            "-of", "csv=p=0", str(path), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), 15)
+        _codec_cache[key] = out.decode().strip() or None
+    return _codec_cache[key]
+
+
+async def keyframe_before(path, offset: float) -> tuple[float, str | None]:
+    """(time of the last video keyframe at or before `offset` in the file, codec).
+    Reads only a few seconds of packets around the offset."""
+    lo = max(0.0, offset - 10)
+    proc = await asyncio.create_subprocess_exec(
+        FFPROBE, "-v", "error", "-select_streams", "v:0", "-read_intervals", f"{lo:.3f}%{offset + 0.5:.3f}",
+        "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0", str(path),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    out, _ = await asyncio.wait_for(proc.communicate(), 15)
+    best = 0.0
+    for line in out.decode().splitlines():
+        parts = line.split(",")
+        if len(parts) >= 2 and "K" in parts[1]:
+            try:
+                t = float(parts[0])
+            except ValueError:
+                continue
+            if t <= offset + 0.05:
+                best = max(best, t)
+    return best, await probe_file_codec(str(path))
+
+
+def save_thumb(path: Path, img: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_bytes(img)
+    os.replace(tmp, path)
+
+
 def _video_tag(codec: str | None) -> list[str]:
     # hvc1 (parameter sets in the sample entry) is what Safari/Chrome expect for HEVC in MP4.
     return ["-tag:v", "hvc1"] if codec == "hevc" else []
@@ -302,6 +347,7 @@ class Supervisor:
         self.watchdog = None  # set in _watchdog_loop
         self._motion_push_at: dict[str, float] = {}
         self._motion_pushing: set[str] = set()
+        self._thumb_floor: dict[str, float] = {}  # per camera: thumbs before this are swept
         self._tasks: list[asyncio.Task] = []
 
     def reload_notifier(self) -> None:
@@ -324,15 +370,20 @@ class Supervisor:
             return
         want_detect = (self.cfg.motion.detect and self.detector is not None
                        and self.detector.ok and eid is not None)
+        want_thumb = eid is not None
         push_ready = a.motion_push and a.notifier != "none"
         push_now = push_ready and not (a.motion_push_cooldown and ts - self._motion_push_at.get(cam_id, 0.0) < a.motion_push_cooldown)
-        if not (want_detect or push_now):
+        if not (want_detect or want_thumb or push_now):
             return
         if cam_id in self._motion_pushing:
             return
         self._motion_pushing.add(cam_id)
         try:
             img = await snapshot_camera(cam, self.cfg)
+            if want_thumb:
+                # Persist the frame as the event's thumbnail: the incident list and
+                # filmstrips then load instantly instead of running ffmpeg per image.
+                await asyncio.to_thread(save_thumb, self.storage.thumb_path(cam_id, eid), img)
             labels: list[str] = []
             if want_detect:
                 labels = await asyncio.to_thread(self.detector.detect, img)
@@ -376,16 +427,35 @@ class Supervisor:
         self._tasks.append(asyncio.create_task(self._watchdog_loop(), name="watchdog"))
 
     async def _retention_loop(self) -> None:
+        last_sweep = 0.0
         while True:
             try:
                 r = self.cfg.retention  # re-read each cycle so settings changes apply live
                 await asyncio.to_thread(self.storage.run_retention, r.max_gb, r.max_days,
                                         r.min_free_gb, r.reclaim_headroom_gb)
                 if self.events is not None and r.max_days > 0:
-                    await asyncio.to_thread(self.events.prune, time.time() - r.max_days * 86400)
+                    gone = await asyncio.to_thread(self.events.prune, time.time() - r.max_days * 86400)
+                    for cam_id, eid in gone:
+                        self.storage.delete_thumbs(cam_id, [eid])
+                if self.events is not None and time.monotonic() - last_sweep > 600:
+                    last_sweep = time.monotonic()
+                    await asyncio.to_thread(self._sweep_thumbs)
             except Exception:
                 log.exception("retention failed")
             await asyncio.sleep(60)
+
+    def _sweep_thumbs(self) -> None:
+        """Drop thumbnails of events whose footage is gone (deleted from grace).
+        Only the events between the previous and the current oldest recording are
+        visited, so each sweep is cheap."""
+        for cam in self.cfg.cameras:
+            first = self.storage.earliest(cam.id)
+            if first is None:
+                continue
+            lo = self._thumb_floor.get(cam.id, 0.0)
+            if first > lo:
+                self.storage.delete_thumbs(cam.id, self.events.ids_between(cam.id, lo, first))
+                self._thumb_floor[cam.id] = first
 
     async def _watchdog_loop(self) -> None:
         from .alerts import Watchdog, build_observer, make_notifier

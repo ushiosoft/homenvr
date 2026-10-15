@@ -22,7 +22,8 @@ STAMP_FMT = "%Y%m%dT%H%M%SZ"
 # Reserved top-level folders under storage_dir that are not cameras.
 GRACE_DIR = "grace"
 SAVED_DIR = "saved"
-RESERVED_DIRS = {GRACE_DIR, SAVED_DIR}
+THUMBS_DIR = "thumbs"  # per-event JPEGs: thumbs/<camera>/<event id>.jpg
+RESERVED_DIRS = {GRACE_DIR, SAVED_DIR, THUMBS_DIR}
 # Same thing in ffmpeg strftime syntax (ffmpeg runs with TZ=UTC).
 FFMPEG_PATTERN = "%Y%m%dT%H%M%SZ.mp4"
 
@@ -121,6 +122,60 @@ class Storage:
                 if seg.start <= ts < seg.end:
                     return seg.path, max(0.0, ts - seg.start)
         return None, 0.0
+
+    def _stamps(self, camera: str) -> list[float]:
+        """Segment start times (active + grace) from filenames only — no stat calls,
+        which are slow on bind-mounted Windows drives."""
+        out: list[float] = []
+        for base in (self.root, self.root / GRACE_DIR):
+            d = base / camera
+            if d.is_dir():
+                out.extend(s for s in (parse_stamp(e.name) for e in os.scandir(d)
+                                       if e.name.endswith(".mp4")) if s is not None)
+        out.sort()
+        return out
+
+    def earliest(self, camera: str) -> float | None:
+        st = self._stamps(camera)
+        return st[0] if st else None
+
+    def coverage(self, camera: str, start: float, end: float, segment_seconds: float,
+                 now: float | None = None) -> list[tuple[float, float]]:
+        """Recorded spans overlapping [start, end), from segment names alone.
+
+        A segment is assumed to run until the next one starts or for segment_seconds,
+        whichever is first; the newest one runs at most until `now`.
+        """
+        now = now or time.time()
+        stamps = self._stamps(camera)
+        spans: list[tuple[float, float]] = []
+        for i, a in enumerate(stamps):
+            b = a + segment_seconds
+            if i + 1 < len(stamps):
+                b = min(b, stamps[i + 1])
+            else:
+                b = min(b, now)
+            if b <= start or a >= end:
+                continue
+            a, b = max(a, start), min(b, end)
+            if spans and a - spans[-1][1] <= 2:  # contiguous (allow small gaps)
+                spans[-1] = (spans[-1][0], b)
+            else:
+                spans.append((a, b))
+        return spans
+
+    def thumb_path(self, camera: str, event_id: int) -> Path:
+        return self.root / THUMBS_DIR / camera / f"{int(event_id)}.jpg"
+
+    def delete_thumbs(self, camera: str, event_ids) -> int:
+        n = 0
+        for eid in event_ids:
+            try:
+                self.thumb_path(camera, eid).unlink()
+                n += 1
+            except FileNotFoundError:
+                pass
+        return n
 
     def cameras_on_disk(self) -> list[str]:
         if not self.root.is_dir():

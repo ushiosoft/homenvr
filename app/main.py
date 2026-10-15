@@ -100,36 +100,179 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         return [{"name": s.path.name, "start": s.start, "end": s.end, "size": s.size,
                  "url": f"recordings/{cam_id}/{s.path.name}"} for s in segs]
 
+    def event_store():
+        """The live EventStore, or a read-only view of the DB when recorders are off."""
+        if sup.events is not None:
+            return sup.events
+        if not cfg.events_db.exists():
+            return None
+        from .events import EventStore
+        if getattr(app.state, "events_ro", None) is None:
+            app.state.events_ro = EventStore(cfg.events_db)
+        return app.state.events_ro
+
     @app.get("/api/cameras/{cam_id}/events")
     async def events(cam_id: str, start: float = Query(...), end: float = Query(...)):
         camera_or_404(cam_id)
-        store = sup.events
+        store = event_store()
         if store is None:
-            from .events import EventStore
-            if not cfg.events_db.exists():
-                return []
-            store = EventStore(cfg.events_db)
+            return []
         return await asyncio.to_thread(store.query, cam_id, start, end)
 
+    @app.get("/api/incidents")
+    async def incidents(start: float = Query(...), end: float = Query(...),
+                        filter: str = Query("all", pattern="^(all|person|vehicle)$")):
+        """Events of all cameras clustered into incidents, newest first, with noisy
+        single-camera stretches folded into "busy" periods (see app/incidents.py)."""
+        from . import incidents as inc
+        from .motion import sensitivity_for
+        store = event_store()
+        evs = await asyncio.to_thread(store.query_all, start, end) if store else []
+        thresholds = {c.id: sensitivity_for(c, cfg) for c in cfg.cameras}
+        names = {c.id: c.name for c in cfg.cameras}
+        out = inc.build(evs, thresholds, names, filter)
+        for item in out["items"]:
+            if item["kind"] == "busy":
+                del item["events"]  # can be hundreds; the card only needs the bursts
+        out["thresholds"] = thresholds
+        out["labels_since"] = await asyncio.to_thread(store.first_labeled) if store else None
+        out["detect"] = cfg.motion.detect
+        return out
+
+    @app.post("/api/incidents/dismiss")
+    async def dismiss(request: Request):
+        """Mark events as a false alarm (hidden from incidents); {"event_ids": [...], "undo": false}."""
+        body = await request.json()
+        ids = [int(i) for i in body.get("event_ids", [])][:20000]
+        store = event_store()
+        if store is None:
+            raise HTTPException(400, "motion events are disabled")
+        n = await asyncio.to_thread(store.dismiss, ids, not body.get("undo"))
+        return {"updated": n}
+
+    @app.get("/api/timeline")
+    async def timeline(start: float = Query(...), end: float = Query(...),
+                       bucket: float = Query(1800, ge=60, le=86400)):
+        """Per camera: motion counts per bucket (default 30 min), recorded spans, and the
+        events themselves (for marks). Built from events.db and segment names only."""
+        if end <= start or end - start > 7 * 86400:
+            raise HTTPException(400, "bad range")
+        import math
+        store = event_store()
+        evs = await asyncio.to_thread(store.query_all, start, end) if store else []
+        nb = math.ceil((end - start) / bucket)
+        now = time.time()
+        lanes = []
+        for c in cfg.cameras:
+            counts, person, vehicle = [0] * nb, [0] * nb, [0] * nb
+            marks = []
+            for e in evs:
+                if e["camera"] != c.id:
+                    continue
+                i = min(nb - 1, int((e["ts"] - start) // bucket))
+                counts[i] += 1
+                kind = "person" if "person" in e["label"] else "vehicle" if "vehicle" in e["label"] else "motion"
+                if kind == "person":
+                    person[i] += 1
+                elif kind == "vehicle":
+                    vehicle[i] += 1
+                marks.append([round(e["ts"], 2), kind, e["id"]])
+            cov = await asyncio.to_thread(storage.coverage, c.id, start, end, cfg.segment_seconds, now)
+            lanes.append({"id": c.id, "name": c.name, "rotation": c.rotation,
+                          "counts": counts, "person": person, "vehicle": vehicle,
+                          "total": len(marks), "events": marks,
+                          "coverage": [[round(a, 2), round(b, 2)] for a, b in cov]})
+        return {"start": start, "end": end, "bucket": bucket, "now": now, "cameras": lanes}
+
+    @app.get("/api/events/{event_id}/thumb")
+    async def event_thumb(event_id: int):
+        """The event's saved frame; for older events (before thumbnails were persisted)
+        extract one from the recording once and keep it."""
+        store = event_store()
+        ev = await asyncio.to_thread(store.get, event_id) if store else None
+        if not ev:
+            raise HTTPException(404)
+        p = storage.thumb_path(ev["camera"], event_id)
+        if not await asyncio.to_thread(p.is_file):
+            cam = cfg.camera(ev["camera"])
+            if not cam:
+                raise HTTPException(404)
+            from .recorder import save_thumb, thumbnail
+            # Events can fall in the short gaps between recording files: use the
+            # nearest footage within a few seconds.
+            path = None
+            for d in (0, 2, -2, 5, -5, 10, -10, 15):
+                path, offset = await asyncio.to_thread(storage.segment_at, cam.id, ev["ts"] + d)
+                if path:
+                    break
+            if not path:
+                raise HTTPException(404, "no recording at that time")
+            try:
+                img = await thumbnail(path, offset, width=480, rot=cam.rotation)
+            except Exception as e:
+                raise HTTPException(502, f"thumbnail failed: {e}")
+            await asyncio.to_thread(save_thumb, p, img)
+            return Response(img, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+        return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
     @app.get("/api/cameras/{cam_id}/playback.mp4")
-    async def playback(cam_id: str, start: float = Query(...), dur: float = Query(300)):
+    async def playback(cam_id: str, start: float = Query(...), dur: float = Query(300),
+                       height: int = Query(720, ge=240, le=1440)):
         """Transcode a window [start, start+dur) to H.264 and stream it progressively
-        (fragmented MP4), so HEVC recordings are playable in any browser."""
+        (fragmented MP4), so HEVC recordings are playable in any browser. Grid tiles
+        ask for a smaller height (480), which roughly halves the CPU cost."""
         cam = camera_or_404(cam_id)
         dur = min(max(dur, 1), 1800)
         script = storage.concat_list(cam_id, start, start + dur)
         if script.count("\nfile ") == 0:
             raise HTTPException(404, "no recordings at that time")
-        tmpdir = Path(tempfile.mkdtemp(prefix="pb-"))
-        (tmpdir / "list.ffconcat").write_text(script)
         from .recorder import rotation_vf
         rv = rotation_vf(cam.rotation)
-        vf = (rv + "," if rv else "") + "scale=-2:720"
+        vf = (rv + "," if rv else "") + f"scale=-2:{height - height % 2}"
+        return await _stream_ffmpeg(script, [
+            "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k"])
+
+    @app.get("/api/cameras/{cam_id}/keyframe")
+    async def keyframe(cam_id: str, ts: float = Query(...)):
+        """The recording keyframe at or before `ts` (plus the codec). Direct play
+        stream-copies from a keyframe, so the client asks for this exact start to keep
+        its clock aligned with the other cameras."""
+        camera_or_404(cam_id)
+        from .recorder import keyframe_before
+        path, offset = await asyncio.to_thread(storage.segment_at, cam_id, ts)
+        if not path:
+            raise HTTPException(404, "no recording at that time")
+        seg_start = ts - offset
+        try:
+            kf, codec = await keyframe_before(path, offset)
+        except Exception as e:
+            raise HTTPException(502, f"probe failed: {e}")
+        return {"ts": seg_start + kf, "codec": codec}
+
+    @app.get("/api/cameras/{cam_id}/remux.mp4")
+    async def remux(cam_id: str, start: float = Query(...), dur: float = Query(300)):
+        """Direct play: the original 2K stream, stream-copied (no re-encode, ~0 CPU) into
+        fragmented MP4. Only for browsers that decode the camera codec (HEVC). Not
+        rotated — the client rotates it like live view. No audio (the grid is muted)."""
+        camera_or_404(cam_id)
+        dur = min(max(dur, 1), 1800)
+        script = storage.concat_list(cam_id, start, start + dur)
+        if script.count("\nfile ") == 0:
+            raise HTTPException(404, "no recordings at that time")
+        from .recorder import _video_tag, probe_file_codec
+        first = re.search(r"^file '(.+)'$", script, re.M).group(1)
+        codec = await probe_file_codec(first)
+        return await _stream_ffmpeg(script, ["-t", str(dur), "-map", "0:v:0", "-c:v", "copy",
+                                             *_video_tag(codec), "-an"])
+
+    async def _stream_ffmpeg(script: str, out_args: list[str]) -> StreamingResponse:
+        """Run ffmpeg over a concat script and stream its fragmented-MP4 output."""
+        tmpdir = Path(tempfile.mkdtemp(prefix="pb-"))
+        (tmpdir / "list.ffconcat").write_text(script)
         proc = await asyncio.create_subprocess_exec(
             FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0",
-            "-f", "concat", "-i", str(tmpdir / "list.ffconcat"), "-t", str(dur),
-            "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k",
+            "-f", "concat", "-i", str(tmpdir / "list.ffconcat"), *out_args,
             "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )

@@ -12,7 +12,7 @@ def test_event_store_add_query_prune(tmp_path):
     assert len(s.query("cam1", 1050, 2000)) == 1          # start inclusive-ish window
     assert len(s.query("cam2", 0, 2000)) == 1
     assert s.latest("cam1") == 1100.0
-    assert s.prune(1050) == 1                              # removes the ts=1000 event
+    assert s.prune(1050) == [("cam1", 1)]                  # removes the ts=1000 event
     assert len(s.query("cam1", 0, 2000)) == 1
 
 

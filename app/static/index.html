@@ -2,161 +2,500 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>homenvr</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --bg:#f6f7f9; --panel:#fff; --fg:#1b1f24; --muted:#667085; --line:#d0d5dd; --accent:#2563eb; --rec:#16a34a; --bad:#dc2626; }
-  @media (prefers-color-scheme: dark) { :root { --bg:#0f1115; --panel:#181b21; --fg:#e6e8eb; --muted:#98a2b3; --line:#2c313a; --accent:#60a5fa; --rec:#4ade80; --bad:#f87171; } }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.4 system-ui, sans-serif; }
-  header { display:flex; gap:16px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
-  header h1 { font-size:16px; margin:0; }
-  nav button { background:none; border:0; color:var(--muted); font:inherit; padding:6px 10px; cursor:pointer; border-radius:6px; }
-  nav button.on { color:var(--fg); background:var(--bg); }
-  #usage { margin-left:auto; color:var(--muted); font-size:12px; }
-  main { padding:16px; }
-  .grid { display:grid; gap:12px; grid-template-columns:repeat(auto-fill, minmax(420px, 1fr)); }
-  @media (max-width:480px) { .grid { grid-template-columns:1fr; } }
-  .tile { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .vwrap { position:relative; overflow:hidden; aspect-ratio:16/9; background:#000; }
-  .vwrap video { width:100%; height:100%; object-fit:contain; display:block; transform-origin:center center; will-change:transform; }
-  .vwrap.zoomed video { cursor:grab; touch-action:none; }
-  .vwrap.zoomed video:active { cursor:grabbing; }
-  #playerWrap.zoomed #player { touch-action:none; }
-  .ctls { position:absolute; top:6px; right:6px; display:flex; gap:4px; z-index:2; opacity:0; transition:opacity .15s; }
-  .vwrap:hover .ctls { opacity:1; }
-  .iconbtn { background:rgba(0,0,0,.55); color:#fff; border:0; border-radius:5px; width:30px; height:30px; font-size:14px; cursor:pointer; line-height:1; }
-  .iconbtn:hover { background:rgba(0,0,0,.8); }
-  .playtap { position:absolute; inset:0; margin:auto; width:140px; height:40px; background:rgba(0,0,0,.6); color:#fff; border:0; border-radius:8px; cursor:pointer; z-index:3; }
-  .zhint { position:absolute; bottom:6px; left:8px; z-index:2; font-size:11px; color:#fff; background:rgba(0,0,0,.5); padding:1px 6px; border-radius:4px; opacity:0; transition:opacity .15s; }
-  .vwrap:hover .zhint { opacity:.85; }
-  /* Touch devices have no hover: keep controls visible and drop the mouse hint. */
-  @media (hover: none) {
-    .ctls { opacity:1; }
-    .iconbtn { width:34px; height:34px; font-size:16px; background:rgba(0,0,0,.6); }
-    .zhint { display:none; }
+  :root {
+    --bg:#0f1115; --panel:#13161b; --panel2:#171a20; --raised:#1d2128; --line:#262b33; --line2:#2a2f38;
+    --fg:#e6e8eb; --muted:#9aa3b2; --dim:#7c8594; --accent:#60a5fa; --accent-ink:#0b1220;
+    --motion:#94a3b8; --person:#4ade80; --vehicle:#fbbf24; --head:#f87171; --live:#b91c1c;
+    --warn-bg:#1a1710; --warn-line:#4a3f22; --warn:#fcd34d; --warn-text:#c7b98a;
+    --mono:'IBM Plex Mono', ui-monospace, monospace;
+    --lane-label:156px; --lane-gap:12px; --lane-h:68px;
+    color-scheme: dark;
   }
-  .tile .bar { display:flex; gap:8px; padding:6px 10px; align-items:center; font-size:12px; }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); display:inline-block; }
-  .dot.ok { background:var(--rec); }
-  .err { color:var(--bad); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; text-align:right; }
-  .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
-  select, input, button.btn { font:inherit; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--panel); color:var(--fg); }
-  button.btn { cursor:pointer; }
-  #playerWrap { position:relative; overflow:hidden; background:#000; border-radius:8px; }
-  #player { width:100%; max-height:70vh; display:block; background:#000; transform-origin:center center; will-change:transform; }
-  #playerWrap.zoomed #player { cursor:grab; }
-  #now { color:var(--muted); font-variant-numeric:tabular-nums; }
-  /* Playback browse: a vertical day-rail (left) next to the newest-first event grid */
-  #pbbrowse { display:flex; gap:12px; margin-top:12px; align-items:stretch; }
-  #rail { position:relative; width:54px; flex:none; background:var(--panel); border:1px solid var(--line); border-radius:6px; cursor:pointer; user-select:none; touch-action:none; min-height:460px; }
-  #rail .seg { position:absolute; left:34px; right:6px; background:var(--accent); opacity:.5; border-radius:2px; }
-  #rail .evt { position:absolute; left:20px; width:10px; height:3px; margin-top:-1px; background:#f59e0b; border-radius:1px; }
-  #rail .evt.person { background:#22c55e; } #rail .evt.vehicle { background:#60a5fa; }
-  #rail .tick { position:absolute; left:4px; font-size:9px; color:var(--muted); transform:translateY(-50%); }
-  #rail .cursor { position:absolute; left:0; right:0; height:0; border-top:2px solid var(--bad); }
-  #rail .cursor::after { content:''; position:absolute; right:2px; top:-4px; border:4px solid transparent; border-right-color:var(--bad); }
-  #events { flex:1; display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; align-content:start; }
-  .evhdr { grid-column:1/-1; color:var(--muted); font-size:12px; margin:6px 0 2px; }
-  .evcard { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; cursor:pointer; }
-  .evcard img { width:100%; aspect-ratio:16/9; object-fit:cover; background:#0b0d10; display:block; }
-  .evcard .t { padding:4px 8px; font-size:12px; font-variant-numeric:tabular-nums; display:flex; justify-content:space-between; align-items:center; gap:6px; }
-  .evcard:hover, .evcard.on { border-color:var(--accent); }
-  .chip { font-size:11px; padding:1px 7px; border-radius:10px; white-space:nowrap; }
-  .chip.person { background:rgba(22,163,74,.22); color:#22c55e; }
-  .chip.vehicle { background:rgba(37,99,235,.22); color:#60a5fa; }
-  .chip.motion { background:rgba(148,163,184,.18); color:var(--muted); }
-  .evfilter { grid-column:1/-1; display:flex; gap:6px; align-items:center; margin-bottom:2px; }
-  .evfilter button { background:var(--panel); border:1px solid var(--line); color:var(--muted); border-radius:14px; padding:4px 12px; cursor:pointer; font:inherit; font-size:12px; }
-  .evfilter button.on { color:var(--fg); border-color:var(--accent); }
-  #evcount { margin-left:auto; color:var(--muted); font-size:12px; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); }
+  body { font:14px/1.4 'IBM Plex Sans', system-ui, sans-serif; }
+  button, select, input { font:inherit; color:inherit; }
+  a { color:#93c5fd; }
+  .hidden { display:none !important; }
+  img.broken { visibility:hidden; }
+  .mono { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+
+  /* ---- header ---- */
+  header.top { display:flex; align-items:center; gap:28px; padding:0 32px; min-height:56px; border-bottom:1px solid var(--line); background:var(--panel); flex-wrap:wrap; }
+  header.top .brand { font-weight:600; font-size:16px; letter-spacing:.2px; }
+  nav.main { display:flex; gap:4px; }
+  nav.main a { color:var(--muted); text-decoration:none; padding:8px 12px; border-radius:6px; display:flex; align-items:center; gap:6px; }
+  nav.main a.on { color:var(--fg); background:#1f242c; }
+  nav.main svg { display:none; }
+  .walllink { margin-left:auto; color:var(--muted); font-size:12px; text-decoration:none; border:1px solid var(--line2); padding:6px 10px; border-radius:6px; }
+  #usage { color:var(--muted); font-size:12px; }
+
+  .page { max-width:1440px; margin:0 auto; padding:20px 32px 32px; display:flex; flex-direction:column; gap:20px; }
+
+  /* ---- buttons ---- */
+  .btn { height:40px; padding:0 14px; border:1px solid var(--line2); background:var(--raised); border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; gap:8px; white-space:nowrap; text-decoration:none; color:var(--fg); }
+  .btn:hover { border-color:#3a414c; }
+  .btn:disabled { opacity:.5; cursor:default; }
+  .btn.big { height:44px; }
+  .btn.keep { border-color:#3b4a63; background:#1c2635; color:#bfdbfe; }
+  .btn.golive { background:var(--live); border:0; color:#fff; font-weight:600; }
+  .btn.golive::before, .livepill .d { content:''; width:8px; height:8px; border-radius:50%; background:#fff; }
+  .btn.warn { border-color:#6b5a2a; background:#2a2414; color:#fde68a; height:36px; padding:0 12px; }
+  .btn.warn.ghost { border-color:#3a3424; background:transparent; color:var(--warn-text); }
+  .ibtn { width:44px; height:44px; border:0; background:transparent; border-radius:8px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; color:var(--fg); }
+  .ibtn:hover { background:var(--raised); }
+  .playbtn { width:48px; height:48px; border:0; background:var(--accent); color:var(--accent-ink); border-radius:50%; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  /* ---- toolbar ---- */
+  .toolbar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .livepill { display:flex; align-items:center; gap:8px; height:40px; padding:0 14px; border-radius:8px; background:#2a1416; border:1px solid #7f2a2f; color:#fecaca; font-weight:600; }
+  .livepill .d { background:var(--head); width:9px; height:9px; box-shadow:0 0 0 4px rgba(248,113,113,.2); }
+  .livepill .mono { font-weight:500; color:#fca5a5; }
+  .revpill { display:flex; align-items:center; gap:8px; height:40px; padding:0 14px; border-radius:8px; background:var(--panel2); border:1px solid var(--line2); }
+  .revpill .lbl, .revpill .day { color:var(--muted); }
+  .revpill .mono { font-weight:500; }
+  .filters { display:flex; gap:6px; flex-wrap:wrap; }
+  .filters button { height:40px; padding:0 14px; border-radius:999px; cursor:pointer; background:var(--panel2); border:1px solid var(--line2); color:var(--muted); }
+  .filters button.on { background:#1c2635; border-color:var(--accent); color:var(--fg); }
+  .filters .n { font-family:var(--mono); font-size:12px; opacity:.75; margin-left:6px; }
+  .seg { display:flex; background:var(--panel2); border:1px solid var(--line2); border-radius:8px; padding:4px; gap:4px; }
+  .seg button { padding:0 14px; height:34px; border:0; border-radius:6px; cursor:pointer; background:transparent; color:var(--muted); }
+  .seg button.on { background:#262c36; color:var(--fg); font-weight:500; }
+  .toolbar .seg.layout { margin-left:auto; }
+
+  /* ---- main row ---- */
+  .mainrow { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+  .gridcol { flex:999 1 820px; min-width:0; display:flex; flex-direction:column; gap:12px; }
+
+  /* ---- camera grid ---- */
+  .camgrid { display:grid; gap:8px; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); }
+  .tile { position:relative; background:#000; border-radius:10px; overflow:hidden; aspect-ratio:16/9; min-height:0; outline:2px solid transparent; outline-offset:-2px; }
+  .tile.portrait { aspect-ratio:9/16; }
+  .camgrid.mix .tile.portrait { grid-row:span 2; aspect-ratio:auto; }
+  .tile.sel { outline-color:rgba(96,165,250,.55); }
+  .tile video { position:absolute; left:0; top:0; width:100%; height:100%; object-fit:contain; display:block; transform-origin:center center; will-change:transform; background:#000; }
+  .tile.zoomed video { cursor:grab; touch-action:none; }
+  .tile .name { position:absolute; left:10px; top:10px; background:rgba(10,12,15,.72); padding:4px 9px; border-radius:6px; font-size:12px; font-weight:500; z-index:2; pointer-events:none; }
+  .tile .badge { position:absolute; right:10px; top:10px; padding:4px 9px; border-radius:6px; font-size:11px; font-weight:600; font-family:var(--mono); z-index:2; background:rgba(10,12,15,.72); pointer-events:none; }
+  .tile .badge.live { background:var(--live); color:#fff; }
+  .tile .over { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:10px; z-index:1; color:#c7cdd6; font-size:13px; background:rgba(0,0,0,.45); pointer-events:none; text-align:center; padding:12px; }
+  .tile .ctls { position:absolute; right:8px; bottom:8px; display:flex; gap:4px; z-index:3; opacity:0; transition:opacity .15s; }
+  .tile:hover .ctls, .tile:focus-within .ctls { opacity:1; }
+  .tile .side { display:none; }
+  .iconbtn { background:rgba(0,0,0,.6); color:#fff; border:0; border-radius:6px; width:32px; height:32px; font-size:15px; cursor:pointer; line-height:1; display:inline-flex; align-items:center; justify-content:center; }
+  .iconbtn:hover { background:rgba(0,0,0,.85); }
+  .playtap { position:absolute; inset:0; margin:auto; width:140px; height:40px; background:rgba(0,0,0,.7); color:#fff; border:0; border-radius:8px; cursor:pointer; z-index:4; }
+  @media (hover:none) { .tile .ctls { opacity:1; } .iconbtn { width:36px; height:36px; } }
+  .spin { width:22px; height:22px; border:2px solid #3a414c; border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; flex:none; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce) { .spin, .spinner { animation-duration:2s; } }
+
+  /* Focus layout: the selected camera large, the others small beside it (same videos). */
+  .camgrid.focus { grid-template-columns:minmax(0,1fr) 300px; grid-auto-rows:min-content; }
+  .camgrid.focus .tile { grid-row:auto; }
+  .camgrid.focus .tile.sel { grid-column:1; aspect-ratio:16/9; border-radius:12px; align-self:start; }
+  .camgrid.focus .tile:not(.sel) { grid-column:2; aspect-ratio:16/9; cursor:pointer; }
+  .camgrid.focus .tile:not(.sel) .ctls { display:none; }
+  .camgrid.focus .tile:not(.sel) .side { display:block; position:absolute; left:0; right:0; bottom:0; padding:18px 10px 8px; font-size:12px; color:#c7cdd6; background:linear-gradient(transparent, rgba(0,0,0,.8)); z-index:2; pointer-events:none; }
+  .camgrid.focus .tile:not(.sel) .side b { color:#93c5fd; font-weight:500; float:right; }
+
+  /* ---- transport ---- */
+  .transport { display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--line2); border-radius:10px; padding:6px 10px; flex-wrap:wrap; min-height:56px; }
+  .transport .hint { color:var(--muted); font-size:12px; margin-left:8px; flex:1 1 240px; }
+  .transport .time { font-family:var(--mono); font-size:18px; font-weight:500; margin-left:10px; }
+  .transport .right { margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .syncchip { display:flex; align-items:center; gap:6px; margin-left:10px; padding:5px 10px; border-radius:999px; background:#1d2a1f; color:#86efac; font-size:12px; }
+  .syncchip::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--person); }
+  .syncchip.wait { background:#2a2414; color:#fde68a; } .syncchip.wait::before { background:var(--vehicle); }
+  .chk { display:flex; align-items:center; gap:6px; color:#c7cdd6; font-size:13px; cursor:pointer; white-space:nowrap; }
+  .chk input { accent-color:var(--accent); width:16px; height:16px; }
+  .sel-lbl { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px; }
+  select { background:var(--raised); color:var(--fg); border:1px solid var(--line2); border-radius:6px; padding:6px 8px; }
+
+  /* ---- incidents ---- */
+  aside.incidents { flex:1 1 380px; min-width:300px; background:var(--panel); border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; max-height:720px; }
+  .inc-head { padding:14px 16px 10px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:8px; }
+  h2 { margin:0; font-size:15px; font-weight:600; }
+  .sub { color:var(--muted); font-size:12px; }
+  .inc-list { overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:8px; }
+  .watching { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:10px; background:#1a1314; border:1px solid #3d2326; font-size:13px; color:#fecaca; }
+  .watching::before { content:''; flex:none; width:8px; height:8px; border-radius:50%; background:var(--head); box-shadow:0 0 0 4px rgba(248,113,113,.18); }
+  .icard { text-align:left; width:100%; padding:12px; border-radius:10px; cursor:pointer; display:flex; flex-direction:column; border:1px solid var(--line); background:var(--panel2); }
+  .icard:hover { border-color:#3a414c; }
+  .icard.on { border-color:var(--accent); background:#18212e; box-shadow:inset 3px 0 0 var(--accent); }
+  .icard.noise { opacity:.72; }
+  .icard .row1 { display:flex; align-items:center; gap:8px; width:100%; }
+  .icard .t { font-family:var(--mono); font-size:14px; font-weight:500; }
+  .icard .dur { color:var(--muted); font-size:12px; }
+  .icard .thumbs { display:flex; gap:4px; margin:8px 0 6px; height:58px; overflow:hidden; }
+  .icard .thumbs img { height:58px; width:auto; min-width:32px; border-radius:5px; display:block; background:#0b0d10; }
+  .icard .row3 { display:flex; gap:6px; color:var(--muted); font-size:12px; width:100%; }
+  .icard .row3 .mono { margin-left:auto; }
+  .chip { font-size:11px; padding:2px 8px; border-radius:999px; white-space:nowrap; background:#252b34; color:#cbd5e1; }
+  .chip.person { background:rgba(74,222,128,.16); color:var(--person); }
+  .chip.vehicle { background:rgba(251,191,36,.16); color:var(--vehicle); }
+  .chip.playing { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .chip.noise { background:transparent; border:1px dashed #4a3f22; color:var(--warn-text); }
+  .icard .row1 .chip.kind { margin-left:auto; }
+  .busy { border:1px dashed var(--warn-line); background:var(--warn-bg); border-radius:10px; padding:12px; }
+  .busy .ttl { font-weight:600; color:var(--warn); }
+  .busy .rng { margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--warn-text); }
+  .busy p { margin:0 0 10px; color:var(--warn-text); font-size:12px; }
+  .busy .thumbs { display:flex; gap:4px; margin:8px 0; }
+  .busy .thumbs img { height:52px; width:auto; min-width:30px; border-radius:5px; background:#0b0d10; }
+  .busy .acts { display:flex; gap:8px; flex-wrap:wrap; }
+  .busy .bursts { display:flex; flex-direction:column; gap:4px; margin-top:10px; max-height:260px; overflow:auto; }
+  .busy .bursts button { display:flex; gap:8px; align-items:center; text-align:left; padding:4px 8px; border:1px solid #3a3424; background:transparent; border-radius:6px; cursor:pointer; color:var(--warn-text); font-size:12px; }
+  .tuner { display:flex; align-items:center; gap:8px; margin-top:10px; flex-wrap:wrap; color:var(--warn-text); font-size:12px; }
+  .tuner input[type=range] { flex:1; min-width:120px; accent-color:var(--warn); }
+  .note { margin:4px 4px 0; color:var(--dim); font-size:12px; }
+
+  /* ---- timeline ---- */
+  section.timeline { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px 16px; }
+  .tl-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+  .tl-head .seg { padding:3px; gap:3px; }
+  .daynav { display:flex; align-items:center; gap:2px; }
+  .daynav .ibtn { width:36px; height:36px; }
+  .daynav .lbl { min-width:100px; text-align:center; font-weight:500; }
+  .legend { margin-left:auto; display:flex; gap:14px; align-items:center; color:var(--muted); font-size:12px; flex-wrap:wrap; }
+  .legend span { display:flex; align-items:center; gap:6px; }
+  .legend i { display:inline-block; width:4px; height:12px; border-radius:1px; }
+  .tl-axis { position:relative; height:18px; margin-left:calc(var(--lane-label) + var(--lane-gap)); color:var(--dim); font-family:var(--mono); font-size:11px; }
+  .tl-axis span { position:absolute; transform:translateX(-50%); white-space:nowrap; }
+  .tl-axis span:first-child { transform:none; } .tl-axis span:last-child { transform:translateX(-100%); }
+  .tl-body { position:relative; display:flex; flex-direction:column; gap:8px; margin-top:4px; }
+  .lane { display:flex; align-items:stretch; gap:var(--lane-gap); height:var(--lane-h); }
+  .lane .lab { width:var(--lane-label); flex:none; display:flex; align-items:center; gap:10px; border:0; background:transparent; padding:0; text-align:left; cursor:pointer; color:var(--fg); }
+  .lane .lab .noimg { width:48px; height:48px; border-radius:6px; background:var(--panel2); flex:none; }
+  .lane .lab img { width:48px; height:48px; object-fit:cover; border-radius:6px; display:block; background:var(--panel2); flex:none; }
+  .lane .lab .nm { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .lane .lab .nm b { font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .lane .lab .nm span { font-family:var(--mono); font-size:11px; color:var(--muted); }
+  .lane .lab .nm span.noisy { color:var(--warn); }
+  .lane.sel .lab .nm b { color:#93c5fd; }
+  .track { position:relative; flex:1; background:var(--panel2); border-radius:6px; overflow:hidden; }
+  .track .bars { position:absolute; inset:6px 0 9px 0; display:flex; align-items:flex-end; gap:1px; }
+  .track .bars div { flex:1; background:var(--motion); border-radius:1px 1px 0 0; opacity:.85; }
+  .track .bars div.person { background:var(--person); } .track .bars div.vehicle { background:var(--vehicle); }
+  .track .cov { position:absolute; bottom:0; height:5px; background:#3b4a63; }
+  .track .future { position:absolute; top:0; bottom:0; right:0; background:repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 6px, transparent 6px 12px); }
+  .track .busyband { position:absolute; bottom:5px; height:4px; background:repeating-linear-gradient(90deg, rgba(252,211,77,.7) 0 2px, transparent 2px 5px); }
+  .track .strip { position:absolute; inset:0; display:flex; gap:2px; }
+  .track .strip img { flex:1; min-width:0; height:100%; object-fit:cover; display:block; opacity:.9; background:#0b0d10; }
+  .track .strip .gap { flex:1; background:repeating-linear-gradient(135deg, rgba(255,255,255,.03) 0 6px, transparent 6px 12px); }
+  .track .mk { position:absolute; top:0; bottom:0; width:3px; margin-left:-1px; background:var(--motion); }
+  .track .mk.person { background:var(--person); } .track .mk.vehicle { background:var(--vehicle); }
+  .track .tick { position:absolute; top:0; height:8px; width:2px; margin-left:-1px; }
+  .track .tick.person { background:var(--person); } .track .tick.vehicle { background:var(--vehicle); }
+  .tl-over { position:absolute; top:-6px; bottom:-4px; left:calc(var(--lane-label) + var(--lane-gap)); right:0; cursor:pointer; touch-action:none; z-index:2; }
+  .tl-over .band { position:absolute; top:6px; bottom:4px; background:rgba(96,165,250,.2); border-left:2px solid var(--accent); border-right:2px solid var(--accent); pointer-events:none; }
+  .playhead { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:var(--head); pointer-events:none; }
+  .playhead span { position:absolute; top:-18px; left:50%; transform:translateX(-50%); background:var(--head); color:#1a0b0b; font-family:var(--mono); font-size:11px; font-weight:600; padding:1px 6px; border-radius:4px; white-space:nowrap; }
+  .tl-hint { margin:10px 0 0 calc(var(--lane-label) + var(--lane-gap)); color:var(--dim); font-size:12px; }
+
+  /* ---- focus panel (incident in depth) ---- */
+  .focuspanel { display:flex; flex-direction:column; gap:16px; }
+  .fp-head { display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  .fp-head h1 { margin:0; font-size:18px; font-weight:600; }
+  .fp-head .acts { margin-left:auto; display:flex; gap:8px; flex-wrap:wrap; }
+  .fp-row { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .fp-win { flex:999 1 600px; min-width:0; }
+  .minitl { position:relative; height:40px; background:var(--panel2); border-radius:6px; margin-top:8px; cursor:pointer; touch-action:none; }
+  .minitl .tk { position:absolute; top:6px; bottom:6px; width:4px; margin-left:-2px; border-radius:2px; background:var(--motion); }
+  .minitl .tk.on { background:var(--accent); } .minitl .tk.person { background:var(--person); } .minitl .tk.vehicle { background:var(--vehicle); }
+  .minitl .incwin { position:absolute; top:0; bottom:0; background:rgba(96,165,250,.12); border-left:1px dashed #3b4a63; border-right:1px dashed #3b4a63; }
+  .minitl .ph { position:absolute; top:-4px; bottom:-4px; width:2px; margin-left:-1px; background:var(--head); pointer-events:none; }
+  .miniaxis { position:relative; height:16px; margin-top:4px; color:var(--dim); font-family:var(--mono); font-size:11px; }
+  .miniaxis span { position:absolute; transform:translateX(-50%); } .miniaxis span:first-child { transform:none; } .miniaxis span:last-child { transform:translateX(-100%); }
+  .noisehint { flex:1 1 300px; min-width:260px; border:1px dashed var(--warn-line); background:var(--warn-bg); border-radius:10px; padding:12px; }
+  .noisehint .ttl { font-weight:600; color:var(--warn); margin-bottom:6px; }
+  .noisehint p { margin:0 0 10px; color:var(--warn-text); font-size:12px; }
+  .seq { display:flex; gap:10px; overflow-x:auto; padding-bottom:4px; }
+  .seqcard { flex:none; width:168px; text-align:left; padding:8px; border-radius:10px; cursor:pointer; display:flex; flex-direction:column; border:1px solid var(--line); background:var(--panel2); }
+  .seqcard.on { border-color:var(--accent); background:#18212e; }
+  .seqcard .im { position:relative; display:block; }
+  .seqcard img { width:100%; aspect-ratio:16/9; object-fit:cover; display:block; border-radius:6px; background:#0b0d10; }
+  .seqcard .no { position:absolute; left:6px; top:6px; width:22px; height:22px; border-radius:50%; background:rgba(10,12,15,.8); font-size:11px; font-weight:600; display:flex; align-items:center; justify-content:center; }
+  .seqcard .r { display:flex; justify-content:space-between; margin-top:6px; width:100%; font-size:12px; color:var(--muted); }
+  .seqcard .r .mono { font-size:13px; color:var(--fg); }
+  .strength { position:relative; display:block; width:100%; height:6px; margin-top:6px; background:#252b34; border-radius:3px; }
+  .strength i { position:absolute; left:0; top:0; bottom:0; background:var(--motion); border-radius:3px; }
+  .strength b { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--warn); }
+  .seqcard .cap { font-size:11px; color:var(--muted); margin-top:4px; }
+
+  /* ---- saved / settings ---- */
+  .scard { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin-bottom:16px; max-width:720px; }
+  .scard h3 { margin:0 0 4px; font-size:15px; }
+  p.hint, .scard p.hint { margin:0 0 12px; color:var(--muted); font-size:12px; }
+  .frow { display:flex; gap:10px; align-items:center; margin:8px 0; flex-wrap:wrap; }
+  .frow > label:first-child { width:170px; color:var(--muted); }
+  .frow input:not([type=checkbox]):not([type=range]), .frow select { flex:1; min-width:140px; padding:8px; border:1px solid var(--line2); border-radius:6px; background:var(--panel2); color:var(--fg); }
+  .frow .btn { height:36px; }
+  .saved { color:var(--person); font-size:12px; margin-left:8px; }
+  input[type=range] { accent-color:var(--accent); flex:1; min-width:120px; }
+  .rangeval { min-width:44px; text-align:right; font-family:var(--mono); color:var(--fg); }
+  .rangehint { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; margin:-2px 0 6px 180px; }
+  .camblock { border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
+  .camblock .ctitle { font-weight:600; margin-bottom:4px; }
+
+  /* ---- modal / loading / toast ---- */
   #modal { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.82); padding:16px; }
   #modal .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; max-width:min(96vw,900px); }
   #modal img { max-width:100%; max-height:70vh; border-radius:6px; display:block; background:#000; }
   #modal .mbar { display:flex; gap:8px; align-items:center; margin-top:10px; flex-wrap:wrap; }
-  #modal .mspin { min-height:200px; display:flex; align-items:center; justify-content:center; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; max-width:680px; }
-  .card h3 { margin:0 0 4px; font-size:14px; }
-  .card p.hint { margin:0 0 12px; color:var(--muted); font-size:12px; }
-  .frow { display:flex; gap:10px; align-items:center; margin:8px 0; flex-wrap:wrap; }
-  .frow label { width:170px; color:var(--muted); }
-  .frow input, .frow select { flex:1; min-width:140px; }
-  .saved { color:var(--rec); font-size:12px; margin-left:8px; }
-  input[type=range] { accent-color:var(--accent); flex:1; min-width:120px; }
-  .rangeval { min-width:34px; text-align:right; font-variant-numeric:tabular-nums; color:var(--fg); }
-  .rangehint { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; margin:-2px 0 6px 170px; }
-  @media (max-width:560px) { .rangehint { margin-left:0; } }
-  .camblock { border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
-  .camblock .ctitle { font-weight:600; margin-bottom:4px; }
-  .chk { display:flex; gap:5px; align-items:center; color:var(--muted); white-space:nowrap; }
-  #loading { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column; gap:14px;
-             align-items:center; justify-content:center; background:var(--bg); transition:opacity .3s; }
+  #modal .mspin { min-height:200px; min-width:200px; display:flex; align-items:center; justify-content:center; }
+  #loading { position:fixed; inset:0; z-index:50; display:flex; flex-direction:column; gap:14px; align-items:center; justify-content:center; background:var(--bg); transition:opacity .3s; }
   #loading.gone { opacity:0; pointer-events:none; }
-  .spinner { width:38px; height:38px; border:3px solid var(--line); border-top-color:var(--accent);
-             border-radius:50%; animation:spin .8s linear infinite; }
-  @keyframes spin { to { transform:rotate(360deg); } }
+  .spinner { width:38px; height:38px; border:3px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
   #loading .lmsg { color:var(--muted); font-size:13px; }
-  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration:2s; } }
-  .hidden { display:none; }
+  #toast { position:fixed; left:50%; bottom:24px; transform:translateX(-50%); background:#1f242c; border:1px solid var(--line2); color:var(--fg); padding:10px 16px; border-radius:8px; z-index:120; font-size:13px; max-width:90vw; }
+
+  /* ---- wall display (?wall=1): live only, full screen ---- */
+  body.wall { background:#000; overflow:hidden; }
+  body.wall header.top, body.wall .toolbar, body.wall .transport, body.wall aside.incidents,
+  body.wall section.timeline, body.wall .focuspanel { display:none !important; }
+  body.wall .page { max-width:none; padding:0; height:100vh; }
+  body.wall .mainrow, body.wall .gridcol { height:100vh; gap:0; }
+  body.wall .camgrid { height:100vh; gap:8px; grid-auto-rows:minmax(0,1fr); }
+  body.wall .tile { border-radius:0; aspect-ratio:auto !important; outline:0; }
+  body.wall .tile video { object-fit:cover; }
+  body.wall .tile .name { top:auto; bottom:16px; left:16px; background:none; font-size:18px; text-shadow:0 1px 4px rgba(0,0,0,.8); }
+  body.wall .tile .badge, body.wall .tile .ctls { display:none; }
+  .wallui { display:none; }
+  body.wall .wallui { display:block; }
+  .wclock { position:fixed; right:18px; top:14px; text-align:right; text-shadow:0 1px 6px rgba(0,0,0,.85); z-index:5; }
+  .wclock .mono { font-size:44px; font-weight:500; line-height:1; }
+  .wclock div:last-child { font-size:14px; color:#cbd5e1; margin-top:4px; }
+  .wrec { position:fixed; left:50%; transform:translateX(-50%); top:14px; display:flex; align-items:center; gap:8px; padding:6px 12px; border-radius:999px; background:rgba(10,12,15,.7); font-size:13px; z-index:5; }
+  .wrec::before { content:''; width:8px; height:8px; border-radius:50%; background:var(--head); }
+  .wrec.bad::before { background:var(--vehicle); }
+  .wlatest { position:fixed; right:16px; bottom:14px; display:flex; align-items:center; gap:10px; padding:8px 12px 8px 8px; border-radius:10px; background:rgba(10,12,15,.78); z-index:5; }
+  .wlatest img { width:72px; height:40px; object-fit:cover; border-radius:5px; display:block; }
+  .wlatest b { display:block; font-size:13px; } .wlatest span { font-size:12px; color:var(--muted); }
+  .wexit { position:fixed; left:16px; top:14px; z-index:5; opacity:0; transition:opacity .2s; color:#cbd5e1; background:rgba(10,12,15,.7); padding:6px 10px; border-radius:6px; text-decoration:none; font-size:12px; }
+  body.wall:hover .wexit { opacity:1; }
+
+  /* ---- phone ---- */
+  @media (max-width:760px) {
+    :root { --lane-label:64px; --lane-gap:8px; --lane-h:22px; }
+    header.top { position:fixed; left:0; right:0; bottom:0; z-index:30; padding:6px 0 calc(10px + env(safe-area-inset-bottom)); min-height:0; border-top:1px solid var(--line); border-bottom:0; gap:0; }
+    header.top .brand, .walllink, #usage { display:none; }
+    nav.main { flex:1; }
+    nav.main a { flex:1; flex-direction:column; gap:2px; padding:6px 0; font-size:11px; background:none !important; }
+    nav.main a.on { color:#93c5fd; font-weight:600; }
+    nav.main svg { display:block; }
+    .page { padding:12px 12px 96px; gap:12px; }
+    .toolbar { gap:8px; }
+    .toolbar .seg.layout { display:none; }
+    .livepill, .revpill { flex:1; height:40px; font-size:13px; }
+    .filters { order:5; width:100%; overflow-x:auto; flex-wrap:nowrap; }
+    .filters button { height:34px; font-size:13px; }
+    /* Phone order (as in the mockup): cameras + transport, swimlanes, then incidents. */
+    .mainrow { display:contents; }
+    .toolbar { order:0; } .gridcol { order:1; } section.timeline { order:2; } aside.incidents { order:3; }
+    .gridcol { flex-basis:100%; }
+    /* Phone: always the focus arrangement — selected camera full width, others as chips. */
+    .camgrid, .camgrid.focus, .camgrid.mix { grid-template-columns:repeat(auto-fit, minmax(0, 1fr)); gap:8px; }
+    .camgrid .tile.sel { grid-column:1 / -1 !important; grid-row:1 !important; aspect-ratio:16/9 !important; }
+    .camgrid .tile:not(.sel) { grid-column:auto !important; grid-row:2 !important; aspect-ratio:auto !important; height:58px; cursor:pointer; }
+    .camgrid .tile:not(.sel) .ctls, .camgrid .tile:not(.sel) .badge, .camgrid .tile:not(.sel) .over { display:none; }
+    .camgrid .tile:not(.sel) .side { display:none !important; }
+    .camgrid .tile:not(.sel) .name { top:auto; bottom:4px; left:4px; font-size:11px; padding:2px 6px; }
+    .transport { justify-content:space-between; padding:4px; }
+    .transport .hint, .transport .syncchip, .transport .time { display:none; }
+    .transport .right { margin-left:0; width:100%; justify-content:center; }
+    aside.incidents { max-height:none; min-width:0; flex-basis:100%; }
+    section.timeline { padding:8px 10px 6px; }
+    .legend, .tl-hint, #zoomcap { display:none; }
+    .lane .lab img, .lane .lab .noimg { display:none; }
+    .lane .lab .nm span { display:none; }
+    .lane .lab .nm b { font-size:11px; font-weight:400; color:var(--muted); }
+    .tl-body { gap:4px; }
+    .track .bars { inset:2px 0 3px 0; }
+    .track .cov { height:2px; }
+    .fp-head .acts { margin-left:0; }
+    .rangehint { margin-left:0; }
+  }
 </style>
 </head>
 <body>
 <div id="loading"><div class="spinner"></div><span class="lmsg">Loading cameras…</span></div>
-<header>
-  <h1>homenvr</h1>
-  <nav><button id="tab-live" class="on">Live</button><button id="tab-play">Playback</button><button id="tab-saved">Saved</button><button id="tab-settings">Settings</button></nav>
+<header class="top">
+  <span class="brand">homenvr</span>
+  <nav class="main" aria-label="Main">
+    <a href="#cameras" data-tab="cameras"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>Cameras</a>
+    <a href="#saved" data-tab="saved"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l2.7 5.6 6.2.9-4.5 4.3 1 6.2L12 17l-5.4 3 1-6.2L3 9.5l6.2-.9z"/></svg>Saved</a>
+    <a href="#settings" data-tab="settings"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Settings</a>
+  </nav>
+  <a class="walllink" href="?wall=1">Wall display</a>
   <span id="usage"></span>
 </header>
-<main>
-  <section id="live" class="grid"></section>
-  <section id="play" class="hidden">
-    <div class="controls">
-      <select id="cam"></select>
-      <input id="day" type="date">
-      <button class="btn" id="prev">◀ day</button><button class="btn" id="next">day ▶</button>
-      <button class="btn" id="prevEvt" title="previous motion">◀ motion</button><button class="btn" id="nextEvt" title="next motion">motion ▶</button>
-      <span id="now"></span>
-      <button class="btn" id="zinPlay" title="Zoom in">＋</button>
-      <button class="btn" id="zoutPlay" title="Zoom out">－</button>
-      <button class="btn" id="rotPlay" title="Rotate view">⟳ rotate</button>
-      <span style="flex:1"></span>
-      <label><input id="exlen" type="number" value="60" min="1" max="360" style="width:64px"> s from cursor</label>
-      <button class="btn" id="export">⬇ Download</button>
-      <button class="btn" id="keep" title="Save permanently (never auto-deleted)">★ Keep</button>
+
+<main class="page" id="cameras">
+  <div class="toolbar">
+    <span class="livepill" id="livepill"><span class="d"></span>LIVE<span class="mono" id="liveclock"></span></span>
+    <span class="revpill hidden" id="revpill"><span class="lbl">Reviewing</span><span class="mono" id="revtime"></span><span class="day" id="revday"></span></span>
+    <button class="btn golive hidden" id="golive">Go live</button>
+    <div class="filters" role="group" aria-label="Filter incidents" id="filters"></div>
+    <div class="seg layout" role="group" aria-label="Layout">
+      <button id="lay-grid" class="on">Grid · all cameras</button>
+      <button id="lay-focus">Focus</button>
     </div>
-    <div id="playerWrap"><video id="player" controls playsinline muted></video></div>
-    <div id="pbbrowse"><div id="rail"></div><div id="events"></div></div>
+  </div>
+
+  <div class="mainrow">
+    <section class="gridcol" aria-label="Camera grid">
+      <div class="camgrid" id="grid"></div>
+      <div class="transport" id="transport">
+        <div id="tp-live" style="display:contents">
+          <button class="btn big" id="replay"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>Replay last 30 s</button>
+          <button class="btn big" id="latest"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 20L9 12l10-8v16z"/><path d="M5 19V5"/></svg>Latest incident</button>
+          <span class="hint">Live preview is the cameras' 640×360 stream; scrubbing back plays the recordings.</span>
+          <span class="right"><button class="btn" id="snap">Snapshot</button></span>
+        </div>
+        <div id="tp-rev" style="display:none">
+          <button class="ibtn" id="pinc" aria-label="Previous incident" title="Previous (older) incident"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 20L9 12l10-8v16z"/><path d="M5 19V5"/></svg></button>
+          <button class="ibtn" id="back10" aria-label="Back 10 seconds"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button>
+          <button class="playbtn" id="pp" aria-label="Pause"></button>
+          <button class="ibtn" id="fwd10" aria-label="Forward 10 seconds"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 4v5h-5"/></svg></button>
+          <button class="ibtn" id="ninc" aria-label="Next incident" title="Next (newer) incident"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4l10 8-10 8V4z"/><path d="M19 5v14"/></svg></button>
+          <span class="time" id="tptime"></span>
+          <span class="syncchip" id="syncchip"></span>
+          <span class="right">
+            <label class="chk"><input type="checkbox" id="skipgaps" checked>Skip quiet gaps</label>
+            <label class="sel-lbl">Speed <select id="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+            <label class="sel-lbl">Quality <select id="quality"><option value="auto">Auto</option><option value="direct">2K direct</option><option value="compat">Compatible</option></select></label>
+            <button class="btn" id="download">Download clip</button>
+            <button class="btn keep" id="keep">Keep</button>
+          </span>
+        </div>
+      </div>
+      <div class="focuspanel hidden" id="focuspanel"></div>
+    </section>
+
+    <aside class="incidents" aria-label="Incidents">
+      <div class="inc-head"><h2>Incidents</h2><span class="sub" id="incsub">newest first</span></div>
+      <div class="inc-list" id="inclist"></div>
+    </aside>
+  </div>
+
+  <section class="timeline" aria-label="Timeline">
+    <div class="tl-head">
+      <h2>Timeline</h2>
+      <div class="seg" role="group" aria-label="Zoom"><button id="z-day" class="on">Day</button><button id="z-half">30 min</button></div>
+      <div class="daynav">
+        <button class="ibtn" id="dprev" aria-label="Previous day"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg></button>
+        <span class="lbl" id="daylbl"></span>
+        <button class="ibtn" id="dnext" aria-label="Next day"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg></button>
+      </div>
+      <span class="sub" id="zoomcap"></span>
+      <span class="legend">
+        <span><i style="width:14px;height:6px;border-radius:2px;background:#3b4a63"></i>recorded</span>
+        <span><i style="background:var(--motion)"></i>motion</span>
+        <span><i style="background:var(--person)"></i>person</span>
+        <span><i style="background:var(--vehicle)"></i>vehicle</span>
+        <span><i style="width:2px;background:var(--head)"></i>playhead</span>
+      </span>
+    </div>
+    <div class="tl-axis" id="axis"></div>
+    <div class="tl-body" id="lanes"></div>
+    <p class="tl-hint" id="tlhint"></p>
   </section>
-  <section id="saved" class="hidden"></section>
-  <section id="settings" class="hidden"></section>
 </main>
+
+<main class="page hidden" id="saved"></main>
+<main class="page hidden" id="settings"></main>
+
+<div class="wallui">
+  <a class="wexit" href="./">Exit wall display</a>
+  <div class="wclock"><div class="mono" id="wtime"></div><div id="wdate"></div></div>
+  <div class="wrec" id="wrec"></div>
+  <div class="wlatest hidden" id="wlatest"></div>
+</div>
+
 <script src="hls.min.js"></script>
 <script>
+'use strict';
 const $ = s => document.querySelector(s);
 const api = p => fetch(p).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
-const fmtBytes = b => b > 1e12 ? (b/1e12).toFixed(2)+' TB' : (b/1e9).toFixed(1)+' GB';
+const post = (p, body) => fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  .then(async r => { if (!r.ok) throw new Error((await r.text()).slice(0, 160) || r.status); return r.json(); });
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmtBytes = b => b > 1e12 ? (b / 1e12).toFixed(2) + ' TB' : (b / 1e9).toFixed(1) + ' GB';
 const pad = n => String(n).padStart(2, '0');
-const fmtTime = t => { const d = new Date(t*1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
-let cameras = [], hlsPlayers = [];
+const fmtTime = t => { const d = new Date(t * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+const fmtHM = t => { const d = new Date(t * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const fmtDay = t => new Date(t * 1000).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+const fmtDur = s => { s = Math.max(1, Math.round(s)); if (s < 60) return s + ' s'; const m = Math.floor(s / 60);
+  if (m < 60) return `${m} m ${s % 60} s`; return `${Math.floor(m / 60)} h ${m % 60} m`; };
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const nowS = () => Date.now() / 1000;
+const DAY = 86400;
+const LIVE_EDGE = 8;        // the newest few seconds aren't in the recordings yet: treat as live
+const PLAY_WINDOW = 300;    // seconds per playback request; tiles continue into the next window
+const LEAD = 5;             // start incident playback this many seconds early
+let toastTimer = null;
+function toast(msg, ms = 3500) {
+  let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+  t.textContent = msg; t.classList.remove('hidden');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.add('hidden'), ms);
+}
+const ICON_PLAY = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>';
+const ICON_PAUSE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+const isWall = new URLSearchParams(location.search).has('wall');
+const isPhone = () => matchMedia('(max-width:760px)').matches;
 
+// ---------------------------------------------------------------- state
+let cameras = [], camRot = {}, thresholds = {};
+const S = {
+  mode: 'live',        // 'live' | 'review'
+  layout: 'grid',      // 'grid' | 'focus'
+  zoom: 'day',         // 'day' | 'half'
+  filter: 'all',
+  dayStart: 0,         // local midnight of the shown day
+  selCam: null,        // the selected (big / master) camera
+  selInc: null,        // incident id picked by the user
+  playT: 0,            // review: current time on the master clock
+  paused: false,
+  speed: 1,
+  halfStart: 0,        // 30-min zoom window start
+  inc: null,           // /api/incidents response
+  tl: null,            // /api/timeline response
+  expanded: new Set(), // busy cards showing their bursts
+  tuning: null,        // busy card id with the tuner open
+};
+const tiles = {};      // camId -> { el, video, hls, state, start, direct, reloads }
+const camById = id => cameras.find(c => c.id === id);
+const camName = id => (camById(id) || {}).name || id;
+const portrait = id => (camRot[id] || 0) % 180 !== 0;
+function todayStart() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() / 1000; }
+function dayOf(t) { const d = new Date(t * 1000); d.setHours(0, 0, 0, 0); return d.getTime() / 1000; }
+function dayEnd(ds) { const d = new Date(ds * 1000); d.setDate(d.getDate() + 1); return d.getTime() / 1000; }
+const isToday = () => S.dayStart === todayStart();
+
+// ---------------------------------------------------------------- live video (HLS)
 function tryPlay(video) {
-  // Chrome's autoplay policy blocks concurrent autoplay unless muted is set as a
-  // *property* (the HTML attribute alone races). Set it, then play() with catch.
+  // Chrome blocks concurrent autoplay unless muted is set as a *property*.
   video.muted = true;
   const p = video.play();
   if (p) p.catch(() => {
-    // Autoplay still blocked: show a one-tap overlay on this tile.
-    const wrap = video.closest('.vwrap, #playerWrap');
+    const wrap = video.closest('.tile');
     if (wrap && !wrap.querySelector('.playtap')) {
       const b = document.createElement('button');
       b.className = 'playtap'; b.textContent = '▶ Tap to play';
-      b.onclick = () => { video.muted = true; video.play(); b.remove(); };
+      onTap(b, () => { video.muted = true; video.play().catch(() => {}); b.remove(); });
       wrap.appendChild(b);
     }
   });
 }
-
-function attach(video, src) {
+function attachHls(video, src) {
   video.muted = true;
   if (video.canPlayType('application/vnd.apple.mpegurl')) {
     video.src = src;
@@ -172,78 +511,49 @@ function attach(video, src) {
   return null;
 }
 
-async function loadCameras() {
-  cameras = await api('api/cameras');
-  for (const c of cameras) camRot[c.id] = c.rotation || 0;
-  const st = await api('api/status');
-  const r = st.retention, s = st.storage;
-  const grace = s.grace_bytes ? ` · ${fmtBytes(s.grace_bytes)} grace` : '';
-  const saved = s.saved_bytes ? ` · ${fmtBytes(s.saved_bytes)} saved` : '';
-  $('#usage').textContent = `${fmtBytes(s.recordings_bytes)} recorded${grace}${saved} · ${fmtBytes(s.disk_free_bytes)} free · keep ${r.max_days || '∞'} d / ${r.max_gb || '∞'} GB`;
-}
-
-// ---- rotate / zoom / pan transform engine (mouse + touch) ----
-// Rotation is a per-camera SERVER setting (so it syncs across devices and is applied
-// to snapshots/thumbnails/playback server-side). Live view still rotates via CSS.
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-let camRot = {};  // camId -> degrees, synced from /api/cameras
-function getRot(id) { return camRot[id] || 0; }
+// ---------------------------------------------------------------- zoom / pan / rotate engine
+// Rotation is a per-camera SERVER setting. Live HLS and direct (2K) playback are rotated
+// here with CSS; transcoded playback, thumbnails and snapshots come rotated from the server.
 async function setRot(id, deg) {
   camRot[id] = deg;
-  try {
-    await fetch('api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cameras: { [id]: { rotation: deg } } }) });
-  } catch {}
-}
-
-// When rotated 90/270, scale the video down so the upright (portrait) image fits
-// inside the SAME 16:9 tile, pillarboxed — keeps the grid uniform (no giant tiles).
-// The fit factor is the container's height/width (9/16 for a 16:9 tile).
-function rotFit(video) {
-  const x = video._xf, wrap = video.closest('.vwrap, #playerWrap');
-  if (!x || x.rot % 180 === 0 || !wrap || !wrap.clientWidth) return 1;
-  return wrap.clientHeight / wrap.clientWidth;
+  try { await post('api/config', { cameras: { [id]: { rotation: deg } } }); } catch {}
 }
 function applyXform(video) {
-  const x = video._xf || (video._xf = { zoom: 1, px: 0, py: 0, rot: 0 });
-  const wrap = video.closest('.vwrap, #playerWrap');
-  if (wrap) wrap.classList.toggle('zoomed', x.zoom > 1);
-  const s = x.zoom * rotFit(video);
-  video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${s}) rotate(${x.rot}deg)`;
+  const x = video._xf, wrap = video.parentElement;
+  if (!x || !wrap) return;
+  wrap.classList.toggle('zoomed', x.zoom > 1);
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  if (x.rot % 180) {
+    // Lay the element out with swapped sides, then rotate it: the picture fills the tile
+    // upright whatever the tile's shape (portrait tile, or pillarboxed in a 16:9 one).
+    Object.assign(video.style, { width: H + 'px', height: W + 'px', left: (W - H) / 2 + 'px', top: (H - W) / 2 + 'px' });
+  } else {
+    Object.assign(video.style, { width: '100%', height: '100%', left: '0', top: '0' });
+  }
+  video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${x.zoom}) rotate(${x.rot}deg)`;
 }
-// Keep the zoomed image covering the frame: pan can't push an edge past the frame edge.
 function clampPan(video) {
-  const x = video._xf, wrap = video.closest('.vwrap, #playerWrap');
-  if (!wrap) return;
+  const x = video._xf, wrap = video.parentElement;
   const mx = (x.zoom - 1) * wrap.clientWidth / 2, my = (x.zoom - 1) * wrap.clientHeight / 2;
   x.px = clamp(x.px, -mx, mx); x.py = clamp(x.py, -my, my);
 }
 function setZoom(video, z) {
   const x = video._xf, prev = x.zoom;
   z = clamp(z, 1, 6);
-  if (z < 1.01) z = 1;  // snap: float drift (e.g. 1.0000000000000002) must not leave it "zoomed"
+  if (z < 1.01) z = 1;
   x.zoom = z;
-  if (z === 1) { x.px = 0; x.py = 0; }
-  else { const k = z / prev; x.px *= k; x.py *= k; clampPan(video); }
+  if (z === 1) { x.px = 0; x.py = 0; } else { const k = z / prev; x.px *= k; x.py *= k; clampPan(video); }
   applyXform(video);
 }
-function zoomBy(video, factor) { setZoom(video, video._xf.zoom * factor); }  // wheel / pinch
-// Buttons step through fixed levels so zooming out always lands exactly on 1x.
 const ZOOM_LEVELS = [1, 1.5, 2, 3, 4, 6];
 function zoomStep(video, dir) {
   const z = video._xf.zoom;
-  const next = dir > 0 ? (ZOOM_LEVELS.find(l => l > z + 0.01) ?? 6)
-                       : ([...ZOOM_LEVELS].reverse().find(l => l < z - 0.01) ?? 1);
-  setZoom(video, next);
+  setZoom(video, dir > 0 ? (ZOOM_LEVELS.find(l => l > z + 0.01) ?? 6) : ([...ZOOM_LEVELS].reverse().find(l => l < z - 0.01) ?? 1));
 }
-function makeInteractive(video, id) {
-  const x = video._xf = { zoom: 1, px: 0, py: 0, rot: id ? getRot(id) : 0 };
-  applyXform(video);
-  const wrap = video.closest('.vwrap, #playerWrap');
-  if (wrap && window.ResizeObserver) new ResizeObserver(() => applyXform(video)).observe(wrap);
-  // Mouse wheel zoom (desktop)
-  video.addEventListener('wheel', e => { e.preventDefault(); zoomBy(video, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
-  // Pointer drag to pan (zoomed) + two-finger pinch zoom (touch)
+function makeInteractive(video) {
+  const x = video._xf = { zoom: 1, px: 0, py: 0, rot: 0 };
+  if (window.ResizeObserver) new ResizeObserver(() => applyXform(video)).observe(video.parentElement);
+  video.addEventListener('wheel', e => { e.preventDefault(); setZoom(video, x.zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2)); }, { passive: false });
   const pts = new Map();
   let drag = null, pinch = null;
   video.addEventListener('pointerdown', e => {
@@ -251,11 +561,8 @@ function makeInteractive(video, id) {
     video.setPointerCapture(e.pointerId);
     if (pts.size === 2) {
       const [a, b] = [...pts.values()];
-      pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), zoom: x.zoom };
-      drag = null;
-    } else if (x.zoom > 1) {
-      drag = { sx: e.clientX, sy: e.clientY, px: x.px, py: x.py };
-    }
+      pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), zoom: x.zoom }; drag = null;
+    } else if (x.zoom > 1) drag = { sx: e.clientX, sy: e.clientY, px: x.px, py: x.py };
   });
   video.addEventListener('pointermove', e => {
     if (!pts.has(e.pointerId)) return;
@@ -263,17 +570,15 @@ function makeInteractive(video, id) {
     if (pinch && pts.size === 2) {
       e.preventDefault();
       const [a, b] = [...pts.values()];
-      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-      setZoom(video, pinch.zoom * (d / pinch.d));
+      setZoom(video, pinch.zoom * (Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / pinch.d));
     } else if (drag) {
       e.preventDefault();
       x.px = drag.px + (e.clientX - drag.sx); x.py = drag.py + (e.clientY - drag.sy);
-      clampPan(video);
-      applyXform(video);
+      clampPan(video); applyXform(video);
     }
   });
-  // Release capture explicitly when a gesture ends; otherwise a still-captured touch
-  // pointer swallows the next tap (e.g. the zoom-out button right after a pan).
+  // Release capture explicitly when a gesture ends; a still-captured touch pointer
+  // swallows the next tap (e.g. the zoom-out button right after a pan).
   const up = e => {
     pts.delete(e.pointerId);
     if (video.hasPointerCapture && video.hasPointerCapture(e.pointerId)) video.releasePointerCapture(e.pointerId);
@@ -283,31 +588,13 @@ function makeInteractive(video, id) {
   video.addEventListener('pointerup', up);
   video.addEventListener('pointercancel', up);
   video.addEventListener('lostpointercapture', e => { pts.delete(e.pointerId); if (pts.size === 0) { drag = null; pinch = null; } });
-  return x;
 }
-// Live view rotation: rotate the tile via CSS and persist the angle to the server
-// (the live HLS isn't server-rotated; snapshots/playback read this same server value).
-function rotateLive(video, id) {
-  const deg = (getRot(id) + 90) % 360;
-  setRot(id, deg);
-  const x = video._xf; x.rot = deg; x.zoom = 1; x.px = 0; x.py = 0;
-  applyXform(video);
-}
-
-// Overlay controls act on the tap itself. Chrome drops the 'click' of the first tap after
-// a touch drag (e.g. pan, then tap zoom-out did nothing), so touch/pen use pointerup;
-// mouse and keyboard still use click, de-duplicated against the preceding tap.
+// Overlay controls act on the tap itself: Chrome drops the 'click' of the first tap after a
+// touch drag, so touch/pen use pointerup; mouse/keyboard use click, de-duplicated.
 function onTap(el, fn) {
-  el.addEventListener('pointerup', e => {
-    if (e.pointerType === 'mouse') return;
-    e.preventDefault(); el._tapAt = Date.now(); fn();
-  });
-  el.addEventListener('click', () => { if (Date.now() - (el._tapAt || 0) > 700) fn(); });
+  el.addEventListener('pointerup', e => { if (e.pointerType === 'mouse') return; e.preventDefault(); el._tapAt = Date.now(); fn(e); });
+  el.addEventListener('click', e => { if (Date.now() - (el._tapAt || 0) > 700) fn(e); });
 }
-
-// Fullscreen is a TOGGLE: the same button (and double-click) exits again. Previously it
-// only ever called requestFullscreen, so inside fullscreen it did nothing (no way back
-// on phones, which have no Esc key).
 const FS_ENTER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
 const FS_EXIT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>';
 const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
@@ -315,7 +602,7 @@ function toggleFullscreen(wrap, video) {
   if (fsElement()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
   if (wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
   else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
-  else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();  // iPhone: native player with its own Done button
+  else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();  // iPhone: native player with its own Done
 }
 function syncFullscreenButtons() {
   const cur = fsElement();
@@ -329,244 +616,825 @@ function syncFullscreenButtons() {
 document.addEventListener('fullscreenchange', syncFullscreenButtons);
 document.addEventListener('webkitfullscreenchange', syncFullscreenButtons);
 
-function renderLive() {
-  hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = [];
-  const root = $('#live'); root.innerHTML = '';
+// ---------------------------------------------------------------- grid
+function buildGrid() {
+  const g = $('#grid'); g.innerHTML = '';
   for (const c of cameras) {
-    const t = document.createElement('div'); t.className = 'tile';
-    t.innerHTML = `<div class="vwrap"><video muted autoplay playsinline></video>
+    const el = document.createElement('div');
+    el.className = 'tile'; el.dataset.cam = c.id;
+    el.innerHTML = `<video muted playsinline></video>
+      <span class="name"></span><span class="badge"></span>
+      <div class="over hidden"></div>
+      <div class="side"></div>
       <div class="ctls">
-        <button class="iconbtn snap" title="Snapshot">▣</button>
-        <button class="iconbtn zin" title="Zoom in">+</button>
-        <button class="iconbtn zout" title="Zoom out">−</button>
-        <button class="iconbtn rot" title="Rotate">⟳</button>
-        <button class="iconbtn fs" title="Fullscreen" aria-label="Fullscreen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button></div>
-      <span class="zhint">scroll to zoom · drag to pan</span></div>
-      <div class="bar"><span class="dot"></span><b></b><span class="err"></span></div>`;
-    t.querySelector('b').textContent = c.name;
-    const v = t.querySelector('video');
-    makeInteractive(v, c.id);
-    onTap(t.querySelector('.snap'), () => openSnapshot(c.id, c.name));
-    onTap(t.querySelector('.zin'), () => zoomStep(v, 1));
-    onTap(t.querySelector('.zout'), () => zoomStep(v, -1));
-    onTap(t.querySelector('.rot'), () => rotateLive(v, c.id));
-    onTap(t.querySelector('.fs'), () => toggleFullscreen(t.querySelector('.vwrap'), v));
-    v.ondblclick = () => toggleFullscreen(t.querySelector('.vwrap'), v);
-    root.appendChild(t);
-    hlsPlayers.push(attach(v, c.live));
+        <button class="iconbtn snap" title="Snapshot" aria-label="Snapshot">▣</button>
+        <button class="iconbtn zin" title="Zoom in" aria-label="Zoom in">+</button>
+        <button class="iconbtn zout" title="Zoom out" aria-label="Zoom out">−</button>
+        <button class="iconbtn rot" title="Rotate" aria-label="Rotate">⟳</button>
+        <button class="iconbtn fs" title="Fullscreen" aria-label="Fullscreen">${FS_ENTER}</button>
+      </div>`;
+    el.querySelector('.name').textContent = c.name;
+    const v = el.querySelector('video');
+    makeInteractive(v);
+    onTap(el.querySelector('.snap'), () => openSnapshot(c.id, c.name));
+    onTap(el.querySelector('.zin'), () => zoomStep(v, 1));
+    onTap(el.querySelector('.zout'), () => zoomStep(v, -1));
+    onTap(el.querySelector('.rot'), () => rotateCam(c.id));
+    onTap(el.querySelector('.fs'), () => toggleFullscreen(el, v));
+    v.addEventListener('dblclick', () => toggleFullscreen(el, v));
+    el.addEventListener('click', e => { if (!e.target.closest('.ctls') && S.selCam !== c.id) selectCam(c.id); });
+    const t = tiles[c.id] = { el, video: v, hls: null, state: 'idle', start: 0, direct: false, reloads: [] };
+    v.addEventListener('playing', () => onTilePlaying(c.id));
+    v.addEventListener('ended', () => onTileEnded(c.id));
+    v.addEventListener('error', () => onTileError(c.id));
+    v.addEventListener('loadeddata', () => { if (S.mode === 'review' && S.paused && t.state === 'loading') { t.state = 'paused'; setOverlay(c.id, ''); } });
+    v.addEventListener('waiting', () => { if (S.mode === 'review' && t.state === 'playing') t.state = 'buffering'; });
+    g.appendChild(el);
   }
-  updateStatus();
+  layoutGrid();
+}
+function layoutGrid() {
+  const g = $('#grid');
+  const por = cameras.filter(c => portrait(c.id)), land = cameras.filter(c => !portrait(c.id));
+  // One portrait camera + two landscape: portrait spans both rows, 9fr:14fr makes the
+  // heights line up (16 units tall each side).
+  const mix = S.layout === 'grid' && por.length === 1 && land.length === 2;
+  g.classList.toggle('mix', mix);
+  g.classList.toggle('focus', S.layout === 'focus' && !isWall);
+  g.style.gridTemplateColumns = mix ? 'minmax(0, 9fr) minmax(0, 14fr)' : '';
+  if (isWall) {
+    g.style.gridTemplateColumns = mix ? 'minmax(0, 9fr) minmax(0, 14fr)'
+      : `repeat(${Math.ceil(Math.sqrt(cameras.length))}, minmax(0, 1fr))`;
+  }
+  for (const c of cameras) {
+    const t = tiles[c.id];
+    t.el.classList.toggle('portrait', portrait(c.id));
+    t.el.classList.toggle('sel', c.id === S.selCam);
+    t.el.style.order = mix ? (portrait(c.id) ? 0 : 1) : (S.layout === 'focus' && c.id === S.selCam ? -1 : 0);
+    if (isWall && mix && portrait(c.id)) t.el.style.gridRow = 'span 2';
+    else if (S.layout === 'focus' && !isWall && c.id === S.selCam) t.el.style.gridRow = `1 / span ${Math.max(1, cameras.length - 1)}`;
+    else t.el.style.gridRow = '';
+  }
+  updateTileSides();
+}
+function selectCam(id) {
+  S.selCam = id;
+  layoutGrid();
+  renderLanesSel();
+  renderTransportLabels();
+}
+async function rotateCam(id) {
+  await setRot(id, ((camRot[id] || 0) + 90) % 360);
+  const t = tiles[id];
+  t.video._xf.zoom = 1; t.video._xf.px = 0; t.video._xf.py = 0;
+  layoutGrid();
+  if (S.mode === 'review' && !t.direct) loadTile(id, tileTime(id) || S.playT);  // server-rotated stream
+  else { t.video._xf.rot = camRot[id]; applyXform(t.video); }
+}
+function setOverlay(id, html) {
+  const o = tiles[id].el.querySelector('.over');
+  if (html) { o.innerHTML = html; o.classList.remove('hidden'); } else o.classList.add('hidden');
+}
+function setBadge(id) {
+  const t = tiles[id], b = t.el.querySelector('.badge');
+  if (S.mode === 'live') { b.textContent = 'LIVE · SD'; b.className = 'badge live'; return; }
+  const tt = tileTime(id);
+  b.className = 'badge';
+  b.textContent = t.state === 'none' ? 'no recording' : `${tt ? fmtTime(tt) : '—'} · ${t.direct ? '2K' : (t.height || 480) + 'p'}`;
 }
 
-function updateStatus() {
-  document.querySelectorAll('#live .tile').forEach((t, i) => {
-    const s = cameras[i]?.status?.record || {};
-    t.querySelector('.dot').classList.toggle('ok', !!s.running);
-    t.querySelector('.dot').title = s.running ? 'recording' : 'not recording';
-    t.querySelector('.err').textContent = s.running ? (s.stream ? `${s.stream.video} ${s.stream.width}×${s.stream.height}` : '') : (s.last_error || 'starting…');
+// ---------------------------------------------------------------- live <-> review
+function goLive() {
+  S.mode = 'live'; S.paused = false;
+  if (!isToday()) { S.dayStart = todayStart(); refreshData(); }
+  if (S.zoom === 'half') S.zoom = 'day';
+  for (const c of cameras) {
+    const t = tiles[c.id];
+    t.state = 'live'; t.direct = false;
+    t.video.removeAttribute('src'); t.video.load();
+    if (t.hls) t.hls.destroy();
+    t.video._xf.rot = camRot[c.id] || 0; t.video._xf.zoom = 1; t.video._xf.px = 0; t.video._xf.py = 0;
+    applyXform(t.video);
+    t.video.playbackRate = 1;
+    setOverlay(c.id, isWall ? '' : '<span class="spin"></span>Switching to live…');
+    t.hls = attachHls(t.video, c.live);
+  }
+  renderAll();
+}
+// Enter review (or move within it) at time T: every camera plays its recording from T.
+function reviewAt(T, opts = {}) {
+  if (T > nowS() - LIVE_EDGE) { goLive(); return; }
+  const wasLive = S.mode === 'live';
+  S.mode = 'review'; S.playT = T; S.paused = false;
+  if (dayOf(T) !== S.dayStart) { S.dayStart = dayOf(T); refreshData(); }
+  if (opts.inc !== undefined) S.selInc = opts.inc;
+  ensureHalfWindow(true);
+  for (const c of cameras) {
+    const t = tiles[c.id];
+    if (wasLive && t.hls) { t.hls.destroy(); t.hls = null; }
+    loadTile(c.id, T);
+  }
+  renderAll();
+}
+// Seek every camera; reuse what's already buffered (instant ±10 s), reload the rest.
+function seekAll(T) {
+  if (S.mode !== 'review') return reviewAt(T);
+  if (T > nowS() - LIVE_EDGE) return goLive();
+  S.playT = T;
+  for (const c of cameras) {
+    const t = tiles[c.id], v = t.video, off = T - t.start;
+    let ok = false;
+    if ((t.state === 'playing' || t.state === 'buffering' || t.state === 'paused') && off >= 0) {
+      for (let i = 0; i < v.buffered.length; i++) if (off >= v.buffered.start(i) && off <= v.buffered.end(i) - 0.3) ok = true;
+    }
+    if (ok) v.currentTime = off; else loadTile(c.id, T);
+  }
+  if (dayOf(T) !== S.dayStart) { S.dayStart = dayOf(T); refreshData(); }
+  ensureHalfWindow();
+  renderAll();
+}
+function covered(id, T) {
+  const lane = S.tl && S.tl.cameras.find(l => l.id === id);
+  if (!lane || T < S.tl.start || T >= S.tl.end) return { ok: true, until: T + PLAY_WINDOW };  // unknown: try
+  for (const [a, b] of lane.coverage) if (T >= a - 1 && T < b) return { ok: true, until: b };
+  return { ok: false };
+}
+function useDirect() {
+  const q = $('#quality').value;
+  if (q === 'compat') return false;
+  if (q === 'direct') return true;
+  return hevcSupported() && localStorage.getItem('hevcBad') !== '1';
+}
+let _hevc = null;
+function hevcSupported() {
+  if (_hevc === null) {
+    const type = 'video/mp4; codecs="hvc1.1.6.L153.B0"';
+    _hevc = document.createElement('video').canPlayType(type) !== '' ||
+            !!(window.MediaSource && MediaSource.isTypeSupported && MediaSource.isTypeSupported(type));
+  }
+  return _hevc;
+}
+async function loadTile(id, T) {
+  const t = tiles[id], v = t.video, gen = (t.gen = (t.gen || 0) + 1);
+  t.reloads.push(Date.now()); t.reloads = t.reloads.filter(x => Date.now() - x < 10000);
+  const cov = covered(id, T);
+  if (!cov.ok) {
+    t.state = 'none'; v.removeAttribute('src'); v.load();
+    setOverlay(id, 'No recording at this time'); setBadge(id); return;
+  }
+  t.state = 'loading';
+  setOverlay(id, '<span class="spin"></span>Loading recording…');
+  let start = Math.floor(T), direct = useDirect() && !t.forceCompat;
+  const dur = clamp(Math.ceil(cov.until - start) + 2, 5, PLAY_WINDOW);
+  if (direct) {
+    try {
+      const k = await api(`api/cameras/${id}/keyframe?ts=${T}`);
+      if (gen !== t.gen) return;
+      if (k.codec !== 'hevc' && k.codec !== 'h264') direct = false;
+      start = k.ts;
+    } catch (e) { if (gen !== t.gen) return; direct = false; }
+  }
+  t.start = start; t.direct = direct;
+  t.height = !direct && tileIsLarge(id) ? 720 : 480;
+  v._xf.rot = direct ? (camRot[id] || 0) : 0;
+  applyXform(v);
+  v.src = direct ? `api/cameras/${id}/remux.mp4?start=${start.toFixed(3)}&dur=${dur}`
+                 : `api/cameras/${id}/playback.mp4?start=${start}&dur=${dur}&height=${t.height}`;
+  v.muted = true;
+  v.playbackRate = S.speed;
+  // Direct play starts at the keyframe just before T (t.start is exact, so the clock
+  // stays right); the stream isn't seekable, so we don't skip ahead to T.
+  if (!S.paused) v.play().catch(() => {});
+  setBadge(id);
+}
+const tileIsLarge = id => tiles[id].el.clientHeight > 420;
+function tileTime(id) {
+  const t = tiles[id];
+  if (!t || !['playing', 'buffering', 'paused'].includes(t.state)) return null;
+  return t.start + t.video.currentTime;
+}
+function onTilePlaying(id) {
+  const t = tiles[id];
+  if (S.mode === 'live') { t.state = 'live'; setOverlay(id, ''); return; }
+  if (t.state === 'none') return;
+  t.state = 'playing'; setOverlay(id, '');
+  t.video.playbackRate = S.speed;
+  if (t.direct && !t.checked) {
+    // Some browsers report HEVC support but render black frames: check once, fall back.
+    t.checked = true;
+    const gen = t.gen;
+    setTimeout(() => {
+      if (gen !== t.gen || !t.direct || t.state !== 'playing') return;
+      if (looksBlack(t.video)) {
+        localStorage.setItem('hevcBad', '1');
+        toast('This browser can\'t display the 2K recordings — switching to compatible playback.');
+        for (const c of cameras) if (tiles[c.id].direct) loadTile(c.id, tileTime(c.id) || S.playT);
+      }
+    }, 1500);
+  }
+}
+function looksBlack(v) {
+  if (!v.videoWidth) return true;
+  try {
+    const c = document.createElement('canvas'); c.width = 32; c.height = 18;
+    const g = c.getContext('2d'); g.drawImage(v, 0, 0, 32, 18);
+    const d = g.getImageData(0, 0, 32, 18).data; let max = 0;
+    for (let i = 0; i < d.length; i += 4) max = Math.max(max, d[i], d[i + 1], d[i + 2]);
+    return max < 12;
+  } catch { return false; }
+}
+function onTileEnded(id) {
+  const t = tiles[id];
+  if (S.mode !== 'review') return;
+  const reached = t.start + t.video.currentTime;
+  if (reached > nowS() - 30) {        // caught up with the recorder
+    if (id === masterCam()) goLive();
+    else { t.state = 'none'; setOverlay(id, 'Caught up — no newer recording'); }
+    return;
+  }
+  loadTile(id, reached);              // next window (or "no recording" in a gap)
+}
+function onTileError(id) {
+  const t = tiles[id];
+  if (S.mode !== 'review' || !t.video.getAttribute('src')) return;
+  if (t.direct) { t.forceCompat = true; loadTile(id, S.playT); return; }  // retry as compatible (H.264)
+  t.state = 'none'; setOverlay(id, 'No recording at this time'); setBadge(id);
+}
+function masterCam() {
+  const ok = id => tiles[id] && ['playing', 'buffering', 'paused'].includes(tiles[id].state);
+  if (ok(S.selCam)) return S.selCam;
+  return cameras.map(c => c.id).find(ok) || null;
+}
+
+// The sync loop: one master clock (the selected camera when it has footage); the others
+// are nudged with playbackRate when they drift > 0.5 s and reloaded when far off.
+let lastInside = null;
+function syncTick() {
+  if (S.mode !== 'review') return;
+  const m = masterCam();
+  if (m) S.playT = tileTime(m);
+  else if (!S.paused) S.playT += 0.25 * S.speed * (cameras.some(c => tiles[c.id].state === 'loading') ? 0 : 1);
+  let inSync = 0, withFootage = 0;
+  for (const c of cameras) {
+    const t = tiles[c.id], v = t.video;
+    if (t.state === 'none') {
+      if (covered(c.id, S.playT).ok && t.reloads.length < 3 && !S.paused) loadTile(c.id, S.playT);
+      continue;
+    }
+    if (t.state === 'loading') continue;
+    withFootage++;
+    if (S.paused) { if (!v.paused) v.pause(); t.state = 'paused'; inSync++; continue; }
+    if (v.paused && t.state !== 'buffering') v.play().catch(() => {});
+    if (t.state === 'paused') t.state = 'playing';
+    if (c.id === m) { v.playbackRate = S.speed; inSync++; continue; }
+    const d = tileTime(c.id) - S.playT;
+    if (Math.abs(d) > 4) { if (t.reloads.length < 3) loadTile(c.id, S.playT + 1); }
+    else if (Math.abs(d) > 0.5) v.playbackRate = S.speed * (d > 0 ? 0.8 : 1.25);
+    else { v.playbackRate = S.speed; inSync++; }
+  }
+  // Skip quiet gaps: when playback runs out of an incident, jump to the next one.
+  const cur = incidentAt(S.playT);
+  if ($('#skipgaps').checked && !S.paused && lastInside && !cur) {
+    const nx = nextIncident(lastInside.end + 1);
+    if (nx) { lastInside = null; S.selInc = nx.id; seekAll(nx.start - LEAD); return; }
+  }
+  lastInside = cur || (lastInside && S.playT < lastInside.end + 11 ? lastInside : null);
+  const chip = $('#syncchip');
+  const loading = cameras.filter(c => tiles[c.id].state === 'loading').length;
+  if (loading) { chip.className = 'syncchip wait'; chip.textContent = `loading ${loading} camera${loading > 1 ? 's' : ''}…`; }
+  else if (inSync === withFootage) { chip.className = 'syncchip'; chip.textContent = withFootage === cameras.length ? `${withFootage} cameras in sync` : `${withFootage} of ${cameras.length} cameras have footage`; }
+  else { chip.className = 'syncchip wait'; chip.textContent = 'syncing…'; }
+  for (const c of cameras) setBadge(c.id);
+  renderClock();
+}
+
+// ---------------------------------------------------------------- incidents helpers
+const incItems = () => (S.inc ? S.inc.items : []);
+const realIncidents = () => incItems().filter(i => i.kind === 'incident');
+function incidentAt(T) {
+  return realIncidents().find(i => T >= i.start - LEAD - 1 && T <= i.end + 10) || null;
+}
+function nextIncident(T) {   // the next newer incident starting after T
+  return realIncidents().filter(i => i.start > T).sort((a, b) => a.start - b.start)[0] || null;
+}
+function prevIncident(T) {
+  return realIncidents().filter(i => i.start < T).sort((a, b) => b.start - a.start)[0] || null;
+}
+function currentIncident() {
+  if (S.mode !== 'review') return null;
+  return incidentAt(S.playT) || realIncidents().find(i => i.id === S.selInc) || null;
+}
+function playIncident(i) {
+  S.selInc = i.id;
+  if (i.cameras && i.cameras.length && !isPhone()) S.selCam = i.cameras[0];
+  if (isPhone() && i.cameras && i.cameras.length) S.selCam = i.cameras[0];
+  layoutGrid();
+  if (S.mode === 'review') seekAll(i.start - LEAD); else reviewAt(i.start - LEAD, { inc: i.id });
+}
+const thumbUrl = eid => `api/events/${eid}/thumb`;
+const camThumb = (cam, ts) => `api/cameras/${cam}/thumb?ts=${Math.round(ts / 10) * 10}`;
+
+// ---------------------------------------------------------------- data
+async function refreshData() {
+  const ds = S.dayStart, de = dayEnd(ds);
+  try {
+    const [inc, tl] = await Promise.all([
+      api(`api/incidents?start=${ds}&end=${de}&filter=${S.filter}`),
+      api(`api/timeline?start=${ds}&end=${de}`)]);
+    if (ds !== S.dayStart) return;   // day changed meanwhile
+    S.inc = inc; S.tl = tl; thresholds = inc.thresholds || {};
+  } catch (e) { console.warn('refresh failed', e); }
+  renderAll();
+  renderWallLatest();
+}
+async function loadCameras() {
+  cameras = await api('api/cameras');
+  for (const c of cameras) camRot[c.id] = c.rotation || 0;
+  if (!S.selCam && cameras.length) S.selCam = cameras[0].id;
+  const st = await api('api/status');
+  const r = st.retention, s = st.storage;
+  const grace = s.grace_bytes ? ` · ${fmtBytes(s.grace_bytes)} grace` : '';
+  const saved = s.saved_bytes ? ` · ${fmtBytes(s.saved_bytes)} saved` : '';
+  $('#usage').textContent = `${fmtBytes(s.recordings_bytes)} recorded${grace}${saved} · ${fmtBytes(s.disk_free_bytes)} free · keep ${r.max_days || '∞'} d`;
+  const rec = cameras.filter(c => c.status && c.status.record && c.status.record.running).length;
+  const w = $('#wrec'); w.textContent = `Recording · ${rec} of ${cameras.length} cameras`; w.classList.toggle('bad', rec < cameras.length);
+  if (rec === cameras.length) w.textContent = `Recording · ${rec} camera${rec === 1 ? '' : 's'}`;
+}
+
+// ---------------------------------------------------------------- render: toolbar + transport
+function renderAll() {
+  renderToolbar(); renderTransport(); renderIncidents(); renderTimeline(); renderFocus(); updateTileSides();
+  for (const c of cameras) setBadge(c.id);
+}
+function renderClock() {
+  const live = S.mode === 'live';
+  const t = live ? nowS() : S.playT;
+  $('#liveclock').textContent = fmtTime(nowS());
+  $('#revtime').textContent = fmtTime(t);
+  $('#tptime').textContent = fmtTime(t);
+  $('#revday').textContent = '· ' + fmtDay(t);
+  if (isWall) { $('#wtime').textContent = fmtHM(nowS()); $('#wdate').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }); }
+  renderPlayhead();
+  renderFocusPlayhead();
+  if (S.mode === 'review') { const ci = currentIncident(); markPlaying(ci ? ci.id : null); }
+}
+function renderToolbar() {
+  const live = S.mode === 'live';
+  $('#livepill').classList.toggle('hidden', !live);
+  $('#revpill').classList.toggle('hidden', live);
+  $('#golive').classList.toggle('hidden', live);
+  const c = S.inc ? S.inc.counts : { all: 0, person: 0, vehicle: 0 };
+  const defs = [['all', 'All motion'], ['person', 'People'], ['vehicle', 'Vehicles']];
+  $('#filters').innerHTML = defs.map(([k, l]) =>
+    `<button data-f="${k}" class="${S.filter === k ? 'on' : ''}" aria-pressed="${S.filter === k}">${l}<span class="n">${c[k] ?? 0}</span></button>`).join('');
+  $('#filters').querySelectorAll('button').forEach(b => b.onclick = () => { S.filter = b.dataset.f; refreshData(); });
+  $('#lay-grid').classList.toggle('on', S.layout === 'grid');
+  $('#lay-focus').classList.toggle('on', S.layout === 'focus');
+  renderClock();
+}
+function renderTransport() {
+  const live = S.mode === 'live';
+  $('#tp-live').style.display = live ? 'contents' : 'none';
+  $('#tp-rev').style.display = live ? 'none' : 'contents';
+  $('#pp').innerHTML = S.paused ? ICON_PLAY : ICON_PAUSE;
+  $('#pp').setAttribute('aria-label', S.paused ? 'Play' : 'Pause');
+  renderTransportLabels();
+}
+function renderTransportLabels() {
+  $('#download').textContent = `Download ${camName(S.selCam)}`;
+  const ci = currentIncident();
+  $('#keep').textContent = ci ? 'Keep incident' : 'Keep 60 s';
+}
+
+// ---------------------------------------------------------------- render: incidents list
+let thumbObserver = null;
+function lazyImg(src, alt = '') { return `<img alt="${esc(alt)}" data-src="${src}" loading="lazy" onerror="this.classList.add('broken')">`; }
+function observeImgs(root) {
+  if (!thumbObserver) thumbObserver = new IntersectionObserver((ents, obs) => {
+    for (const en of ents) if (en.isIntersecting) { en.target.src = en.target.dataset.src; obs.unobserve(en.target); }
+  }, { rootMargin: '300px' });
+  root.querySelectorAll('img[data-src]:not([src])').forEach(i => thumbObserver.observe(i));
+}
+function labelChip(labels) {
+  if (labels.includes('person')) return '<span class="chip person kind">person</span>';
+  if (labels.includes('vehicle')) return '<span class="chip vehicle kind">vehicle</span>';
+  return '<span class="chip kind">motion</span>';
+}
+function renderIncidents() {
+  const list = $('#inclist');
+  const keepScroll = list.scrollTop;
+  const items = incItems();
+  const today = isToday();
+  $('#incsub').textContent = `newest first · ${S.inc ? S.inc.counts.all : 0} ${today ? 'today' : 'this day'}`;
+  const parts = [];
+  if (S.mode === 'live' && today) parts.push('<div class="watching">Watching live — new incidents appear here as they happen</div>');
+  const cur = currentIncident();
+  for (const i of items) {
+    if (i.kind === 'busy') { parts.push(busyCard(i)); continue; }
+    const on = cur && cur.id === i.id;
+    const thumbs = i.thumbs.slice(0, 3).map(th => lazyImg(thumbUrl(th.event_id), camName(th.camera))).join('');
+    parts.push(`<button class="icard${on ? ' on' : ''}${i.likely_noise ? ' noise' : ''}" data-inc="${i.id}">
+      <span class="row1"><span class="t">${fmtTime(i.start)}</span><span class="dur">${fmtDur(i.end - i.start + 1)}</span>
+        <span class="chip playing${on ? '' : ' hidden'}">playing</span>
+        ${i.likely_noise ? '<span class="chip noise">probably noise</span>' : ''}${labelChip(i.labels)}</span>
+      <span class="thumbs">${thumbs}</span>
+      <span class="row3"><span>${esc(i.path)}</span><span class="mono">${i.n} event${i.n === 1 ? '' : 's'}</span></span>
+    </button>`);
+  }
+  if (!items.length) parts.push(`<p class="note">${S.filter === 'all' ? 'No motion this day.' : 'No incidents match this filter.'}</p>`);
+  const ls = S.inc && S.inc.labels_since;
+  if (ls && S.inc.detect && ls > S.dayStart && ls < dayEnd(S.dayStart) && items.some(i => i.start < ls))
+    parts.push(`<p class="note">Object labels (person / vehicle) started at ${fmtHM(ls)}, so earlier incidents show as plain motion.</p>`);
+  list.innerHTML = parts.join('');
+  list.scrollTop = keepScroll;
+  list.querySelectorAll('.icard').forEach(b => b.onclick = () => {
+    const i = items.find(x => x.id === b.dataset.inc); if (i) playIncident(i);
+  });
+  wireBusy(list);
+  observeImgs(list);
+}
+function markPlaying(id) {
+  document.querySelectorAll('#inclist .icard').forEach(b => {
+    const on = b.dataset.inc === id;
+    if (b.classList.contains('on') !== on) { b.classList.toggle('on', on); b.querySelector('.chip.playing').classList.toggle('hidden', !on); }
+  });
+}
+function busyCard(b) {
+  const cam = camName(b.camera);
+  const total = S.inc.total_events, mine = S.inc.events_per_camera[b.camera] || b.n;
+  const picks = [...b.bursts].sort((x, y) => y.n - x.n).slice(0, 2);
+  const thr = thresholds[b.camera] || 4;
+  const suggest = Math.min(20, Math.ceil(Math.max(thr + 1, b.max_score * 0.6 + 0.5)));
+  const exp = S.expanded.has(b.id), tuning = S.tuning === b.id;
+  return `<div class="busy" data-busy="${b.id}">
+    <div style="display:flex;align-items:center;gap:8px"><span class="ttl">Busy period · ${esc(cam)}</span><span class="rng">${fmtHM(b.start)} – ${fmtHM(b.end)}</span></div>
+    <div class="thumbs">${picks.map(p => lazyImg(thumbUrl(p.event_id))).join('')}</div>
+    <p>${b.n} weak motion events folded into this card instead of ${b.bursts.length > 1 ? 'a chain of' : 'an'} hour-long "incident${b.bursts.length > 1 ? 's' : ''}". ${esc(cam)} logged ${mine} of ${S.dayStart === todayStart() ? "today's" : "this day's"} ${total} events — likely shadows or foliage.</p>
+    <div class="acts">
+      <button class="btn warn" data-act="tune">Tune ${esc(cam)} sensitivity</button>
+      <button class="btn warn ghost" data-act="expand">${exp ? 'Collapse' : `Expand ${b.n} events`}</button>
+    </div>
+    ${tuning ? `<div class="tuner"><span>Threshold</span><input type="range" min="1" max="20" step="0.5" value="${suggest}" aria-label="Motion threshold for ${esc(cam)}"><span class="rangeval">${suggest}</span>
+      <button class="btn warn" data-act="savetune">Save</button><span>now ${thr} · higher = fewer events</span></div>` : ''}
+    ${exp ? `<div class="bursts">${[...b.bursts].reverse().map(x => `<button data-t="${x.start}"><span class="mono">${fmtTime(x.start)}</span><span>${fmtDur(x.end - x.start + 1)}</span><span style="margin-left:auto">${x.n} ev</span></button>`).join('')}</div>` : ''}
+  </div>`;
+}
+function wireBusy(root) {
+  root.querySelectorAll('.busy').forEach(card => {
+    const id = card.dataset.busy, b = incItems().find(x => x.id === id);
+    card.querySelectorAll('[data-act]').forEach(btn => btn.onclick = async () => {
+      const act = btn.dataset.act;
+      if (act === 'expand') { S.expanded.has(id) ? S.expanded.delete(id) : S.expanded.add(id); renderIncidents(); }
+      if (act === 'tune') { S.tuning = S.tuning === id ? null : id; renderIncidents(); }
+      if (act === 'savetune') {
+        const val = +card.querySelector('.tuner input').value;
+        try { await post('api/config', { cameras: { [b.camera]: { motion_sensitivity: val } } });
+          toast(`${camName(b.camera)} threshold set to ${val} — applies to new motion.`); S.tuning = null; refreshData(); }
+        catch (e) { toast('Save failed: ' + e.message); }
+      }
+    });
+    const rng = card.querySelector('.tuner input');
+    if (rng) rng.oninput = () => { card.querySelector('.tuner .rangeval').textContent = rng.value; };
+    card.querySelectorAll('.bursts button').forEach(x => x.onclick = () => { S.selCam = b.camera; layoutGrid(); reviewAt(+x.dataset.t - LEAD); });
   });
 }
 
-// ---- playback ----
-let segs = [], events = [], dayStart = 0, current = null;
-const DAY = 86400;
-
-function setDay(d) { // d: Date at local midnight
-  dayStart = d.getTime() / 1000;
-  $('#day').value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-  loadDay();
+// ---------------------------------------------------------------- render: timeline
+function windowRange() {
+  if (S.zoom === 'half') return [S.halfStart, S.halfStart + 1800];
+  return [S.dayStart, dayEnd(S.dayStart)];
 }
-async function loadDay() {
-  const cam = $('#cam').value;
-  segs = await api(`api/cameras/${cam}/segments?start=${dayStart}&end=${dayStart + DAY}`);
-  try { events = await api(`api/cameras/${cam}/events?start=${dayStart}&end=${dayStart + DAY}`); }
-  catch { events = []; }
-  drawRail();
-  renderEvents();
-}
-
-let _thumbObserver = null, evFilter = 'all';
-const evCats = e => (e.label ? e.label.split(',').filter(Boolean) : []);
-function renderEvents() {
-  const root = $('#events'); root.innerHTML = '';
-  const cam = $('#cam').value;
-  const counts = { all: events.length, person: 0, vehicle: 0 };
-  for (const e of events) { if (evCats(e).includes('person')) counts.person++; if (evCats(e).includes('vehicle')) counts.vehicle++; }
-
-  const bar = document.createElement('div'); bar.className = 'evfilter';
-  const mk = (key, text) => `<button data-f="${key}" class="${evFilter === key ? 'on' : ''}">${text}</button>`;
-  bar.innerHTML = mk('all', `All (${counts.all})`) + mk('person', `🚶 People (${counts.person})`) +
-                  mk('vehicle', `🚗 Vehicles (${counts.vehicle})`) + `<span id="evcount"></span>`;
-  bar.querySelectorAll('button').forEach(b => b.onclick = () => { evFilter = b.dataset.f; renderEvents(); });
-  root.appendChild(bar);
-
-  const shown = events.filter(e => evFilter === 'all' || evCats(e).includes(evFilter));
-  $('#evcount') && ($('#evcount').textContent = `${shown.length} shown`);
-  if (!shown.length) {
-    const p = document.createElement('p'); p.className = 'hint'; p.style.gridColumn = '1/-1';
-    p.textContent = events.length ? 'No events match this filter.' : 'No motion events this day.';
-    root.appendChild(p); return;
+function ensureHalfWindow(force) {
+  const t = S.mode === 'live' ? nowS() : S.playT;
+  if (force || t < S.halfStart || t > S.halfStart + 1800) {
+    S.halfStart = t - 1200;
+    if (S.zoom === 'half') renderTimeline();
   }
-  if (_thumbObserver) _thumbObserver.disconnect();
-  _thumbObserver = new IntersectionObserver((entries, obs) => {
-    for (const en of entries) if (en.isIntersecting) { en.target.src = en.target.dataset.src; obs.unobserve(en.target); }
-  }, { rootMargin: '200px' });
-
-  let lastHour = -1;
-  for (const e of [...shown].reverse()) {   // newest first
-    const hr = new Date(e.ts * 1000).getHours();
-    if (hr !== lastHour) {
-      lastHour = hr;
-      const h = document.createElement('div'); h.className = 'evhdr'; h.textContent = `${pad(hr)}:00`;
-      root.appendChild(h);
+}
+const frac = t => { const [a, b] = windowRange(); return (t - a) / (b - a); };
+const pct = f => (clamp(f, 0, 1) * 100).toFixed(3) + '%';
+function renderTimeline() {
+  const [w0, w1] = windowRange();
+  $('#daylbl').textContent = isToday() ? 'Today' : fmtDay(S.dayStart);
+  $('#dnext').disabled = isToday();
+  $('#z-day').classList.toggle('on', S.zoom === 'day');
+  $('#z-half').classList.toggle('on', S.zoom === 'half');
+  const live = S.mode === 'live';
+  $('#zoomcap').textContent = S.zoom === 'day'
+    ? `24 h — bars show motion per 30 min${isToday() ? '; the right edge of the recording is live' : ''}`
+    : `${fmtHM(w0)} – ${fmtHM(w1)} — every lane is a filmstrip; drag to scrub all cameras`;
+  $('#tlhint').textContent = live
+    ? 'Drag the playhead left (or tap any incident) to review — the grid switches to recordings. Go live returns here.'
+    : 'Reviewing recordings. Drag to the end of the recorded bar, or press Go live, to return to live view.';
+  // axis
+  let ticks;
+  if (S.zoom === 'day') ticks = [0, 3, 6, 9, 12, 15, 18, 21, 24].map(h => [h / 24, pad(h)]);
+  else ticks = [0, 0.25, 0.5, 0.75, 1].map(f => [f, fmtHM(w0 + f * 1800)]);
+  $('#axis').innerHTML = ticks.map(([f, l]) => `<span style="left:${f * 100}%">${l}</span>`).join('');
+  // lanes
+  const busyByCam = {};
+  for (const b of incItems()) if (b.kind === 'busy') (busyByCam[b.camera] = busyByCam[b.camera] || []).push(b);
+  const lanes = S.tl ? S.tl.cameras : cameras.map(c => ({ id: c.id, name: c.name, counts: [], person: [], vehicle: [], coverage: [], events: [], total: 0 }));
+  const now = nowS();
+  const html = lanes.map(l => {
+    const noisy = !!busyByCam[l.id];
+    const lastEv = l.events.length ? l.events[l.events.length - 1] : null;
+    let inner = '';
+    if (S.zoom === 'day') {
+      const max = Math.max(1, ...l.counts);
+      inner += '<div class="bars">' + l.counts.map((n, i) => {
+        const cls = l.person[i] ? 'person' : l.vehicle[i] ? 'vehicle' : '';
+        return `<div class="${cls}" style="height:${n ? Math.max(12, Math.round(n / max * 100)) : 0}%" title="${n} events"></div>`;
+      }).join('') + '</div>';
+      for (const [a, b] of l.coverage) inner += `<div class="cov" style="left:${pct(frac(a))};width:${pct(frac(b) - frac(a))}"></div>`;
+      for (const [ts, kind] of l.events) if (kind !== 'motion') inner += `<div class="tick ${kind}" style="left:${pct(frac(ts))}"></div>`;
+    } else {
+      const n = Math.max(4, Math.min(12, Math.round((($('#lanes').clientWidth || 900) - 168) / 120)));
+      const slot = 1800 / n;
+      inner += '<div class="strip">';
+      for (let k = 0; k < n; k++) {
+        const ts = w0 + (k + 0.5) * slot;
+        if (ts > now - 20 || !covered(l.id, ts).ok) { inner += '<div class="gap"></div>'; continue; }
+        // Prefer a saved event frame inside the slot (instant), else extract one.
+        const ev = l.events.find(e => Math.abs(e[0] - ts) < slot / 2);
+        inner += `<img alt="" loading="lazy" onerror="this.classList.add('broken')" src="${ev ? thumbUrl(ev[2]) : camThumb(l.id, ts)}">`;
+      }
+      inner += '</div>';
+      for (const [ts, kind] of l.events) if (ts >= w0 && ts <= w1) inner += `<div class="mk ${kind}" style="left:${pct(frac(ts))}"></div>`;
     }
-    const cats = evCats(e);
-    const chip = cats.includes('person') ? '<span class="chip person">person</span>'
-      : cats.includes('vehicle') ? '<span class="chip vehicle">vehicle</span>'
-      : '<span class="chip motion">motion</span>';
-    const card = document.createElement('div'); card.className = 'evcard';
-    card.innerHTML = `<img alt="" data-src="api/cameras/${cam}/thumb?ts=${e.ts}" loading="lazy">
-      <div class="t"><span>${fmtTime(e.ts)}</span>${chip}</div>`;
-    card.onclick = () => {
-      document.querySelectorAll('.evcard.on').forEach(x => x.classList.remove('on'));
-      card.classList.add('on');
-      playAt(e.ts);
-      $('#playerWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    };
-    _thumbObserver.observe(card.querySelector('img'));
-    root.appendChild(card);
+    for (const b of busyByCam[l.id] || []) if (b.end > w0 && b.start < w1) inner += `<div class="busyband" style="left:${pct(frac(b.start))};width:${pct(frac(b.end) - frac(b.start))}" title="busy period (folded)"></div>`;
+    if (isToday() && now < w1) inner += `<div class="future" style="left:${pct(frac(now))}"></div>`;
+    return `<div class="lane${l.id === S.selCam ? ' sel' : ''}" data-cam="${l.id}">
+      <button class="lab" data-cam="${l.id}">${lastEv ? `<img alt="" src="${thumbUrl(lastEv[2])}">` : '<span class="noimg"></span>'}
+        <span class="nm"><b>${esc(l.name)}</b><span class="${noisy ? 'noisy' : ''}">${l.total} events</span></span></button>
+      <div class="track">${inner}</div></div>`;
+  }).join('');
+  $('#lanes').innerHTML = html + '<div class="tl-over" id="tlover"><div class="band hidden" id="band"></div><div class="playhead" id="playhead"><span></span></div></div>';
+  $('#lanes').querySelectorAll('.lab').forEach(b => b.onclick = () => selectCam(b.dataset.cam));
+  wireScrub();
+  renderPlayhead();
+}
+function renderLanesSel() {
+  document.querySelectorAll('#lanes .lane').forEach(l => l.classList.toggle('sel', l.dataset.cam === S.selCam));
+}
+let scrubT = null;
+function renderPlayhead() {
+  const ph = $('#playhead'); if (!ph) return;
+  const live = S.mode === 'live';
+  const t = scrubT ?? (live ? nowS() : S.playT);
+  const [w0, w1] = windowRange();
+  ph.style.display = t >= w0 && t <= w1 ? '' : 'none';
+  ph.style.left = pct(frac(t));
+  ph.querySelector('span').textContent = scrubT != null ? fmtTime(scrubT) + (scrubT > nowS() - LIVE_EDGE ? ' · live' : '') : live ? 'LIVE' : fmtTime(t);
+  const band = $('#band'), ci = currentIncident();
+  if (band) {
+    if (ci && S.zoom === 'half' && ci.end > w0 && ci.start < w1) {
+      band.classList.remove('hidden');
+      band.style.left = pct(frac(ci.start - 2)); band.style.width = pct(frac(ci.end + 2) - frac(ci.start - 2));
+    } else band.classList.add('hidden');
   }
 }
-function drawRail() {  // vertical day rail: 00:00 top -> 24:00 bottom
-  const rl = $('#rail'); rl.innerHTML = '';
-  for (let h = 0; h <= 24; h += 3) {
-    const k = document.createElement('div'); k.className = 'tick'; k.style.top = (h/24*100) + '%'; k.textContent = pad(h); rl.appendChild(k);
+function wireScrub() {
+  const over = $('#tlover');
+  let dragging = false;
+  const tAt = x => { const r = over.getBoundingClientRect(); const [w0, w1] = windowRange(); return w0 + clamp((x - r.left) / r.width, 0, 1) * (w1 - w0); };
+  over.addEventListener('pointerdown', e => { dragging = true; over.setPointerCapture(e.pointerId); scrubT = tAt(e.clientX); renderPlayhead(); });
+  over.addEventListener('pointermove', e => { if (dragging) { scrubT = Math.min(tAt(e.clientX), nowS()); renderPlayhead(); } });
+  const end = () => {
+    if (!dragging) return; dragging = false;
+    const T = scrubT; scrubT = null;
+    if (T == null) return;
+    if (T > nowS() - LIVE_EDGE) { if (S.mode !== 'live') goLive(); else renderPlayhead(); return; }
+    S.selInc = null;
+    if (S.mode === 'review') seekAll(T); else reviewAt(T);
+  };
+  over.addEventListener('pointerup', end);
+  over.addEventListener('pointercancel', () => { dragging = false; scrubT = null; renderPlayhead(); });
+}
+
+// ---------------------------------------------------------------- focus panel
+function updateTileSides() {
+  const ci = currentIncident();
+  for (const c of cameras) {
+    const side = tiles[c.id].el.querySelector('.side');
+    const n = ci ? (ci.counts[c.id] || 0) : 0;
+    side.innerHTML = `${ci ? (n ? `${n} event${n > 1 ? 's' : ''} in this incident` : 'no motion in this window') : esc(c.name)}<b>Swap into view</b>`;
   }
-  for (const s of segs) {
-    const el = document.createElement('div'); el.className = 'seg';
-    const a = Math.max(s.start, dayStart), b = Math.min(s.end, dayStart + DAY);
-    el.style.top = ((a - dayStart)/DAY*100) + '%'; el.style.height = Math.max(0.3, (b - a)/DAY*100) + '%';
-    rl.appendChild(el);
+}
+let focusKey = '';
+function renderFocus() {
+  const fp = $('#focuspanel');
+  const ci = S.layout === 'focus' && !isWall ? currentIncident() : null;
+  fp.classList.toggle('hidden', !ci);
+  if (!ci) { focusKey = ''; return; }
+  const key = ci.id + '|' + (S.inc && S.inc.total_events) + '|' + JSON.stringify(thresholds);
+  updateTileSides();
+  if (key === focusKey) { renderFocusPlayhead(); return; }
+  focusKey = key;
+  const evs = ci.events;
+  const w0 = ci.start - 10, w1 = ci.end + 10;
+  const f = t => ((t - w0) / (w1 - w0) * 100).toFixed(2) + '%';
+  const cams = ci.cameras.map(camName);
+  const labelTxt = ci.labels.length ? ci.labels.join(' + ') + ' detected' : 'no person or vehicle detected';
+  const idx = realIncidents().sort((a, b) => a.start - b.start).findIndex(i => i.id === ci.id);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(k => `<span style="left:${k * 100}%">${fmtTime(w0 + k * (w1 - w0))}</span>`).join('');
+  let noise = '';
+  if (ci.likely_noise) {
+    const cam = ci.cameras[0], thr = thresholds[cam] || 4;
+    const lo = Math.min(...evs.map(e => e.score)), hi = Math.max(...evs.map(e => e.score));
+    const raise = Math.min(20, Math.ceil(hi + 0.5));
+    noise = `<div class="noisehint"><div class="ttl">Probably not an incident</div>
+      <p>${evs.length === 1 ? 'The only event is weak' : `All ${evs.length} events are weak`} (strength ${lo.toFixed(1)}${evs.length > 1 ? '–' + hi.toFixed(1) : ''} against a threshold of ${thr}), only one camera saw anything, and no person or vehicle was detected.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn warn" id="fp-raise" data-v="${raise}">Raise ${esc(camName(cam))} threshold to ${raise}</button>
+      <button class="btn warn ghost" id="fp-dismiss">Mark as false alarm</button></div></div>`;
   }
-  for (const e of events) {
-    const cats = evCats(e);
-    const m = document.createElement('div');
-    m.className = 'evt' + (cats.includes('person') ? ' person' : cats.includes('vehicle') ? ' vehicle' : '');
-    m.style.top = ((e.ts - dayStart)/DAY*100) + '%';
-    m.title = `${cats[0] || 'motion'} ${fmtTime(e.ts)}`;
-    rl.appendChild(m);
-  }
-  const c = document.createElement('div'); c.className = 'cursor'; c.id = 'cursor'; rl.appendChild(c);
-  moveCursor();
+  const smax = Math.max(...evs.map(e => e.score), ...ci.cameras.map(c => (thresholds[c] || 4) * 5));
+  const seq = evs.map((e, k) => {
+    const thr = thresholds[e.camera] || 4, gap = k ? `+${Math.round(e.ts - evs[k - 1].ts)} s` : 'start';
+    const lb = (e.label || '').split(',').filter(Boolean);
+    return `<button class="seqcard" data-t="${e.ts}" data-cam="${e.camera}">
+      <span class="im">${lazyImg(thumbUrl(e.id))}<span class="no">${k + 1}</span></span>
+      <span class="r"><span class="mono">${fmtTime(e.ts)}</span><span>${gap}</span></span>
+      <span class="strength"><i style="width:${(e.score / smax * 100).toFixed(1)}%;${lb.length ? `background:var(--${lb[0]})` : ''}"></i><b style="left:${(thr / smax * 100).toFixed(1)}%"></b></span>
+      <span class="cap">${esc(camName(e.camera))} · strength ${e.score.toFixed(1)}${lb.length ? ' · ' + lb.join(', ') : ''}</span></button>`;
+  }).join('');
+  fp.innerHTML = `
+    <div class="fp-head">
+      <div><h1>Incident · <span class="mono">${fmtTime(ci.start)} – ${fmtTime(ci.end)}</span></h1>
+        <span class="sub">${fmtDay(ci.start)} · ${fmtDur(ci.end - ci.start + 1)} · ${evs.length} event${evs.length > 1 ? 's' : ''} · ${cams.length > 1 ? esc(ci.path) : esc(cams[0]) + ' only'} · ${labelTxt}</span></div>
+      <div class="acts">
+        <button class="btn" id="fp-prev" ${idx <= 0 ? 'disabled' : ''}>‹ Previous incident</button>
+        <button class="btn" id="fp-next" ${idx < 0 || idx >= realIncidents().length - 1 ? 'disabled' : ''}>Next incident ›</button>
+      </div>
+    </div>
+    <div class="fp-row">
+      <div class="card fp-win"><span class="sub">Incident window with 10 s lead-in and tail — click to jump</span>
+        <div class="minitl" id="minitl"><div class="incwin" style="left:${f(ci.start)};width:calc(${f(ci.end)} - ${f(ci.start)})"></div>
+          ${evs.map(e => { const lb = (e.label || '').split(',').filter(Boolean)[0] || ''; return `<span class="tk ${lb}" data-t="${e.ts}" style="left:${f(e.ts)}" title="${fmtTime(e.ts)} · ${esc(camName(e.camera))}"></span>`; }).join('')}
+          <div class="ph" id="minph"></div></div>
+        <div class="miniaxis">${ticks}</div></div>
+      ${noise}
+    </div>
+    <section class="card"><div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px"><h2>Sequence</h2><span class="sub">each event in order — click to jump; bar = motion strength vs. threshold</span></div>
+      <div class="seq">${seq}</div></section>`;
+  const mt = $('#minitl');
+  mt.onclick = e => { const r = mt.getBoundingClientRect(); seekAll(w0 + clamp((e.clientX - r.left) / r.width, 0, 1) * (w1 - w0)); };
+  fp.querySelectorAll('.seqcard').forEach(b => b.onclick = () => { S.selCam = b.dataset.cam; layoutGrid(); seekAll(+b.dataset.t - 2); });
+  const sorted = realIncidents().sort((a, b) => a.start - b.start);
+  if ($('#fp-prev')) $('#fp-prev').onclick = () => { const i = sorted[idx - 1]; if (i) playIncident(i); };
+  if ($('#fp-next')) $('#fp-next').onclick = () => { const i = sorted[idx + 1]; if (i) playIncident(i); };
+  if ($('#fp-raise')) $('#fp-raise').onclick = async () => {
+    const v = +$('#fp-raise').dataset.v, cam = ci.cameras[0];
+    try { await post('api/config', { cameras: { [cam]: { motion_sensitivity: v } } });
+      toast(`${camName(cam)} threshold set to ${v} — applies to new motion.`); refreshData(); } catch (e) { toast('Save failed: ' + e.message); }
+  };
+  if ($('#fp-dismiss')) $('#fp-dismiss').onclick = async () => {
+    try { await post('api/incidents/dismiss', { event_ids: evs.map(e => e.id) });
+      toast('Marked as a false alarm — hidden from incidents.'); S.selInc = null; refreshData(); } catch (e) { toast('Failed: ' + e.message); }
+  };
+  observeImgs(fp);
+  renderFocusPlayhead();
 }
-function jumpEvent(dir) {
-  if (!events.length) return;
-  const t = playheadTime() || dayStart;
-  const next = dir > 0 ? events.find(e => e.ts > t + 1) : [...events].reverse().find(e => e.ts < t - 1);
-  if (next) playAt(next.ts);
+function renderFocusPlayhead() {
+  const ph = $('#minph'), ci = currentIncident();
+  if (!ph || !ci) return;
+  const w0 = ci.start - 10, w1 = ci.end + 10;
+  ph.style.left = (clamp((S.playT - w0) / (w1 - w0), 0, 1) * 100).toFixed(2) + '%';
+  let near = null, best = 1e9;
+  for (const e of ci.events) { const d = Math.abs(e.ts - S.playT); if (d < best) { best = d; near = e.ts; } }
+  document.querySelectorAll('#minitl .tk, .seqcard').forEach(el => el.classList.toggle('on', +el.dataset.t === near));
 }
-// Recordings are HEVC, which browsers can't play directly, so playback streams an
-// on-the-fly H.264 transcode window starting at the chosen time.
-let playStart = null;
-const PLAY_WINDOW = 300;  // seconds transcoded per request; auto-continues
-function playheadTime() { return playStart != null ? playStart + $('#player').currentTime : null; }
-function moveCursor() {
-  const t = playheadTime(), c = $('#cursor');
-  if (!c) return;
-  c.style.display = t ? '' : 'none';
-  if (t) { c.style.top = ((t - dayStart)/DAY*100) + '%'; $('#now').textContent = new Date(t*1000).toLocaleString(); }
+
+// ---------------------------------------------------------------- wall display
+function renderWallLatest() {
+  if (!isWall) return;
+  const box = $('#wlatest'), i = realIncidents().filter(x => !x.likely_noise)[0];
+  if (!i || !isToday()) { box.classList.add('hidden'); return; }
+  const ago = Math.round((nowS() - i.end) / 60);
+  const what = i.labels.length ? i.labels.map(l => l[0].toUpperCase() + l.slice(1)).join(' + ') : 'Motion';
+  box.innerHTML = `<img alt="" src="${thumbUrl(i.thumbs[0].event_id)}"><span><b>${esc(what)} · ${esc(i.path)}</b><span>latest incident · ${ago < 1 ? 'just now' : ago + ' min ago'}</span></span>`;
+  box.classList.remove('hidden');
 }
-function playAt(t) {
-  if (!segs.length) return;
-  playStart = Math.floor(t);
-  const v = $('#player');
-  v.src = `api/cameras/${$('#cam').value}/playback.mp4?start=${playStart}&dur=${PLAY_WINDOW}`;
-  v.load(); v.play().catch(() => {});
-}
-$('#player').addEventListener('timeupdate', moveCursor);
-$('#player').addEventListener('ended', () => {  // continue into the next window if footage exists
-  if (playStart == null) return;
-  const next = playStart + PLAY_WINDOW;
-  if (segs.some(s => s.end > next && s.start < dayStart + DAY)) playAt(next);
-});
-makeInteractive($('#player'));
-// Playback is rotated server-side (stream + thumbnails), so the player itself never
-// CSS-rotates; it only zooms/pans. Reset transform on camera change.
-function applyPlayerRotation() {
-  const v = $('#player'); v._xf.rot = 0; v._xf.zoom = 1; v._xf.px = 0; v._xf.py = 0; applyXform(v);
-}
-$('#rotPlay').onclick = async () => {
-  const cam = $('#cam').value;
-  await setRot(cam, (getRot(cam) + 90) % 360);
-  const t = playheadTime();
-  await loadDay();           // refresh thumbnails at the new rotation
-  if (t) playAt(t);          // reload the playback stream at the new rotation
+
+// ---------------------------------------------------------------- controls
+$('#golive').onclick = goLive;
+$('#replay').onclick = () => reviewAt(nowS() - 30 - LIVE_EDGE);
+$('#latest').onclick = () => { const i = realIncidents()[0]; if (i) playIncident(i); else toast('No incidents yet today.'); };
+$('#snap').onclick = () => openSnapshot(S.selCam, camName(S.selCam));
+$('#pp').onclick = () => {
+  S.paused = !S.paused;
+  for (const c of cameras) { const v = tiles[c.id].video; if (S.paused) v.pause(); else if (tiles[c.id].state !== 'none') v.play().catch(() => {}); }
+  renderTransport();
 };
-onTap($('#zinPlay'), () => zoomStep($('#player'), 1));
-onTap($('#zoutPlay'), () => zoomStep($('#player'), -1));
-// Vertical rail: click or drag to scrub; preview while dragging, commit on release.
-(function () {
-  const rail = $('#rail');
-  let dragging = false, previewT = null;
-  const railTime = y => {
-    const r = rail.getBoundingClientRect();
-    return dayStart + Math.min(1, Math.max(0, (y - r.top) / r.height)) * DAY;
-  };
-  const preview = t => {
-    const c = $('#cursor'); if (c) { c.style.display = ''; c.style.top = ((t - dayStart) / DAY * 100) + '%'; }
-    $('#now').textContent = new Date(t * 1000).toLocaleString();
-  };
-  rail.addEventListener('pointerdown', e => { dragging = true; rail.setPointerCapture(e.pointerId); previewT = railTime(e.clientY); preview(previewT); });
-  rail.addEventListener('pointermove', e => { if (dragging) { previewT = railTime(e.clientY); preview(previewT); } });
-  const commit = () => { if (dragging && previewT != null) { dragging = false; playAt(previewT); } };
-  rail.addEventListener('pointerup', commit);
-  rail.addEventListener('pointercancel', () => { dragging = false; });
-})();
-$('#cam').onchange = () => { playStart = null; applyPlayerRotation(); loadDay(); };
-$('#day').onchange = e => { const [y,m,d] = e.target.value.split('-').map(Number); setDay(new Date(y, m-1, d)); };
-$('#prev').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()-1); setDay(d); };
-$('#next').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()+1); setDay(d); };
-$('#prevEvt').onclick = () => jumpEvent(-1);
-$('#nextEvt').onclick = () => jumpEvent(1);
-$('#export').onclick = () => {
-  const t = playheadTime(); if (!t) return alert('Pick a start point first — tap the rail or a motion event.');
-  location.href = `api/cameras/${$('#cam').value}/export?start=${t}&end=${t + Number($('#exlen').value || 60)}`;
+$('#back10').onclick = () => seekAll(S.playT - 10);
+$('#fwd10').onclick = () => seekAll(S.playT + 10);
+$('#pinc').onclick = () => { const cur = currentIncident(); const i = prevIncident((cur ? cur.start : S.playT) - 1); if (i) playIncident(i); else toast('No earlier incident this day.'); };
+$('#ninc').onclick = () => { const cur = currentIncident(); const i = nextIncident(cur ? cur.start + 1 : S.playT); if (i) playIncident(i); else toast('No newer incident — press Go live for now.'); };
+$('#speed').onchange = e => { S.speed = +e.target.value; for (const c of cameras) tiles[c.id].video.playbackRate = S.speed; };
+$('#quality').value = localStorage.getItem('quality') || 'auto';
+$('#quality').onchange = e => {
+  localStorage.setItem('quality', e.target.value);
+  if (e.target.value === 'direct') localStorage.removeItem('hevcBad');
+  if (S.mode === 'review') reviewAt(S.playT);
+};
+function clipRange() {
+  const ci = currentIncident();
+  return ci ? [ci.start - 10, ci.end + 10, ci] : [S.playT, S.playT + 60, null];
+}
+$('#download').onclick = () => {
+  const [a, b] = clipRange();
+  location.href = `api/cameras/${S.selCam}/export?start=${a}&end=${b}`;
 };
 $('#keep').onclick = async () => {
-  const t = playheadTime(); if (!t) return alert('Pick a start point first — tap the rail or a motion event.');
-  const name = prompt('Name this saved clip (optional):', '');
+  const [a, b, ci] = clipRange();
+  const cams = ci ? ci.cameras : [S.selCam];
+  const name = prompt(`Name this saved clip (optional) — keeps ${cams.map(camName).join(', ')}:`, ci && ci.labels.length ? ci.labels.join('-') : '');
   if (name === null) return;
-  const len = Number($('#exlen').value || 60);
-  const btn = $('#keep'); btn.disabled = true; btn.textContent = '★ Saving…';
+  const btn = $('#keep'); btn.disabled = true; btn.textContent = 'Saving…';
   try {
-    const r = await fetch(`api/cameras/${$('#cam').value}/save`, { method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ start: t, end: t + len, name }) });
-    if (!r.ok) throw new Error((await r.text()).slice(0, 120));
-    const j = await r.json();
-    btn.textContent = '★ Saved ✓';
-    loadCameras();  // refresh storage breakdown
-  } catch (e) { alert('Save failed: ' + e.message); }
-  finally { setTimeout(() => { btn.disabled = false; btn.textContent = '★ Keep'; }, 2500); }
+    for (const c of cams) await post(`api/cameras/${c}/save`, { start: a, end: b, name });
+    toast(`Saved ${cams.length} clip${cams.length > 1 ? 's' : ''} — find them under Saved.`);
+    loadCameras();
+  } catch (e) { toast('Save failed: ' + e.message); }
+  finally { btn.disabled = false; renderTransportLabels(); }
 };
+$('#lay-grid').onclick = () => { S.layout = 'grid'; layoutGrid(); renderAll(); };
+$('#lay-focus').onclick = () => { S.layout = 'focus'; layoutGrid(); renderAll(); };
+$('#z-day').onclick = () => { S.zoom = 'day'; renderTimeline(); };
+$('#z-half').onclick = () => {
+  S.zoom = 'half';
+  if (S.mode === 'live') reviewAt(nowS() - 30 - LIVE_EDGE); else { ensureHalfWindow(true); renderTimeline(); }
+};
+function shiftDay(dir) {
+  const d = new Date(S.dayStart * 1000); d.setDate(d.getDate() + dir);
+  const ds = d.getTime() / 1000;
+  if (ds > todayStart()) return;
+  if (ds === todayStart()) { goLive(); return; }
+  S.dayStart = ds; S.selInc = null;
+  refreshData().then(() => {
+    // Open the day at its newest incident, else at the end of its recordings.
+    const i = realIncidents()[0];
+    if (i) playIncident(i);
+    else {
+      const ends = (S.tl ? S.tl.cameras : []).flatMap(l => l.coverage.map(c => c[1]));
+      if (ends.length) reviewAt(Math.max(...ends) - 60); else toast('No recordings on this day.');
+    }
+  });
+}
+$('#dprev').onclick = () => shiftDay(-1);
+$('#dnext').onclick = () => shiftDay(1);
+document.addEventListener('keydown', e => {
+  if (e.target.closest('input, select, textarea') || $('#cameras').classList.contains('hidden') || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === ' ' && S.mode === 'review') { e.preventDefault(); $('#pp').click(); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); S.mode === 'review' ? seekAll(S.playT - 10) : reviewAt(nowS() - 10 - LIVE_EDGE); }
+  else if (e.key === 'ArrowRight' && S.mode === 'review') { e.preventDefault(); seekAll(S.playT + 10); }
+  else if (e.key === 'Escape' && S.mode === 'review' && !fsElement()) goLive();
+});
 
+// ---------------------------------------------------------------- snapshot modal
+async function openSnapshot(camId, name) {
+  const m = document.createElement('div'); m.id = 'modal';
+  m.innerHTML = `<div class="box"><div class="mspin"><div class="spinner"></div></div></div>`;
+  m.onclick = e => { if (e.target === m) m.remove(); };
+  document.body.appendChild(m);
+  try {
+    const r = await fetch(`api/cameras/${camId}/snapshot`);
+    if (!r.ok) throw new Error(r.status);
+    const blobUrl = URL.createObjectURL(await r.blob());
+    m.querySelector('.box').innerHTML = `<img src="${blobUrl}" alt="snapshot">
+      <div class="mbar"><b style="flex:1">${esc(name)} · ${new Date().toLocaleTimeString()}</b>
+        <a class="btn" href="${blobUrl}" download="${camId}-snapshot.jpg">Download</a>
+        <button class="btn" id="m_push">Push to alert</button><button class="btn" id="m_close">Close</button>
+        <span class="saved" id="m_msg"></span></div>`;
+    m.querySelector('#m_close').onclick = () => m.remove();
+    m.querySelector('#m_push').onclick = async () => {
+      const msg = m.querySelector('#m_msg'); msg.textContent = 'sending…'; msg.style.color = '';
+      try { const j = await post(`api/cameras/${camId}/snapshot/push`, {}); msg.textContent = '✓ pushed via ' + j.notifier; }
+      catch (e) { msg.textContent = 'failed: ' + e.message; msg.style.color = 'var(--head)'; }
+    };
+  } catch (e) {
+    m.querySelector('.box').innerHTML = `<p class="hint">Snapshot failed (${esc(e.message)}).</p><div class="mbar"><button class="btn" id="m_close">Close</button></div>`;
+    m.querySelector('#m_close').onclick = () => m.remove();
+  }
+}
+
+// ---------------------------------------------------------------- saved
 async function renderSaved() {
   const root = $('#saved');
   root.innerHTML = '<p class="hint">Loading…</p>';
   let clips;
   try { clips = await api('api/saved'); } catch { root.innerHTML = '<p class="hint">Failed to load.</p>'; return; }
-  if (!clips.length) { root.innerHTML = '<div class="card"><h3>Saved clips</h3><p class="hint">None yet. In Playback, pick a point (or jump to a motion event) and press <b>★ Keep</b>. Saved clips are never auto-deleted.</p></div>'; return; }
-  root.innerHTML = `<div class="card"><h3>Saved clips (${clips.length})</h3>
-    <p class="hint">Permanent — excluded from retention. Total ${fmtBytes(clips.reduce((a, c) => a + c.size, 0))}.</p>
-    <div id="savedlist"></div></div>`;
+  if (!clips.length) { root.innerHTML = '<div class="scard"><h3>Saved clips</h3><p class="hint">None yet. While reviewing, press <b>Keep</b> to save the incident (or 60 s). Saved clips are never auto-deleted.</p></div>'; return; }
+  root.innerHTML = `<div class="scard"><h3>Saved clips (${clips.length})</h3>
+    <p class="hint">Permanent — excluded from retention. Total ${fmtBytes(clips.reduce((a, c) => a + c.size, 0))}.</p><div id="savedlist"></div></div>`;
   const list = $('#savedlist');
   for (const c of clips) {
     const row = document.createElement('div'); row.className = 'frow';
-    row.innerHTML = `<b style="flex:1;min-width:200px">${esc(c.name)}</b>
-      <span class="hint">${fmtBytes(c.size)} · ${new Date(c.ctime * 1000).toLocaleString()}</span>
-      <a class="btn" href="saved/${encodeURIComponent(c.name)}" target="_blank">▶ Open</a>
-      <a class="btn" href="saved/${encodeURIComponent(c.name)}" download>⬇</a>
-      <button class="btn del">🗑</button>`;
+    row.innerHTML = `<b style="flex:1;min-width:200px;word-break:break-all">${esc(c.name)}</b>
+      <span class="sub">${fmtBytes(c.size)} · ${new Date(c.ctime * 1000).toLocaleString()}</span>
+      <a class="btn" href="saved/${encodeURIComponent(c.name)}" target="_blank">Open</a>
+      <a class="btn" href="saved/${encodeURIComponent(c.name)}" download>Download</a>
+      <button class="btn del">Delete</button>`;
     row.querySelector('.del').onclick = async () => {
       if (!confirm('Delete saved clip ' + c.name + '?')) return;
       await fetch('api/saved/' + encodeURIComponent(c.name), { method: 'DELETE' });
@@ -576,58 +1444,7 @@ async function renderSaved() {
   }
 }
 
-function tab(name) {
-  for (const n of ['live', 'play', 'saved', 'settings']) {
-    $('#tab-' + n).classList.toggle('on', name === n);
-    $('#' + n).classList.toggle('hidden', name !== n);
-  }
-  if (name === 'live') renderLive();
-  else { hlsPlayers.forEach(h => h && h.destroy()); hlsPlayers = []; document.querySelectorAll('#live video').forEach(v => v.removeAttribute('src')); }
-  if (name === 'play') { if (!dayStart) { const d = new Date(); d.setHours(0,0,0,0); setDay(d); } applyPlayerRotation(); }
-  if (name === 'saved') renderSaved();
-  if (name === 'settings') renderSettings();
-}
-$('#tab-live').onclick = () => tab('live');
-$('#tab-play').onclick = () => tab('play');
-$('#tab-saved').onclick = () => tab('saved');
-$('#tab-settings').onclick = () => tab('settings');
-
-// ---- live snapshot modal ----
-async function openSnapshot(camId, camName) {
-  const m = document.createElement('div'); m.id = 'modal';
-  m.innerHTML = `<div class="box"><div class="mspin"><div class="spinner"></div></div></div>`;
-  m.onclick = e => { if (e.target === m) m.remove(); };
-  document.body.appendChild(m);
-  let blobUrl = null;
-  try {
-    const r = await fetch(`api/cameras/${camId}/snapshot`);
-    if (!r.ok) throw new Error(r.status);
-    blobUrl = URL.createObjectURL(await r.blob());
-    m.querySelector('.box').innerHTML = `
-      <img src="${blobUrl}" alt="snapshot">
-      <div class="mbar">
-        <b style="flex:1">${esc(camName)} · ${new Date().toLocaleTimeString()}</b>
-        <a class="btn" href="${blobUrl}" download="${camId}-snapshot.jpg">⬇ Download</a>
-        <button class="btn" id="m_push">▲ Push to alert</button>
-        <button class="btn" id="m_close">Close</button>
-        <span class="saved" id="m_msg"></span></div>`;
-    m.querySelector('#m_close').onclick = () => m.remove();
-    m.querySelector('#m_push').onclick = async () => {
-      const msg = m.querySelector('#m_msg'); msg.textContent = 'sending…'; msg.style.color = '';
-      try {
-        const pr = await fetch(`api/cameras/${camId}/snapshot/push`, { method: 'POST' });
-        if (!pr.ok) throw new Error((await pr.text()).slice(0, 140));
-        const j = await pr.json(); msg.textContent = '✓ pushed via ' + j.notifier;
-      } catch (e) { msg.textContent = 'failed: ' + e.message; msg.style.color = 'var(--bad)'; }
-    };
-  } catch (e) {
-    m.querySelector('.box').innerHTML = `<p class="hint">Snapshot failed (${e.message}).</p><div class="mbar"><button class="btn" id="m_close">Close</button></div>`;
-    m.querySelector('#m_close').onclick = () => m.remove();
-  }
-}
-
-// ---- settings page ----
-const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// ---------------------------------------------------------------- settings
 async function renderSettings() {
   const root = $('#settings');
   root.innerHTML = '<p class="hint">Loading…</p>';
@@ -636,30 +1453,30 @@ async function renderSettings() {
   const a = cfg.settings.alerts, m = cfg.settings.motion, r = cfg.settings.retention;
   const opt = (v, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${v}</option>`;
   root.innerHTML = `
-    <div class="card">
+    <div class="scard">
       <h3>Alerts</h3>
-      <p class="hint">Get notified if a camera stops recording or the disk fills. Secrets show as ${'•••'}; leave them to keep the stored value.</p>
+      <p class="hint">Get notified if a camera stops recording or the disk fills. Secrets show as •••; leave them to keep the stored value.</p>
       <div class="frow"><label>Notifier</label><select id="s_notifier">${cfg.notifiers.map(n => opt(n, a.notifier)).join('')}</select></div>
       <div class="frow nf nf-ntfy"><label>ntfy URL</label><input id="s_ntfy" value="${esc(a.ntfy_url)}" placeholder="https://ntfy.sh/your-topic"></div>
       <div class="frow nf nf-webhook"><label>Discord/Slack webhook</label><input id="s_webhook" value="${esc(a.webhook_url)}" placeholder="https://discord.com/api/webhooks/..."></div>
       <div class="frow nf nf-telegram"><label>Telegram bot token</label><input id="s_tg_token" value="${esc(a.telegram.bot_token)}" placeholder="123456:ABC-..."></div>
       <div class="frow nf nf-telegram"><label>Telegram chat ID</label><input id="s_tg_chat" value="${esc(a.telegram.chat_id)}" placeholder="e.g. 123456789"></div>
       <div class="frow"><label>Alert if stalled (sec)</label><input id="s_stale" type="number" min="10" value="${a.stale_segment_seconds}"></div>
-      <div class="frow"><label>Push motion snapshots</label><input id="s_mpush" type="checkbox" ${a.motion_push ? 'checked' : ''} style="flex:0;width:auto"><span class="hint">send a photo notification when motion is detected</span></div>
-      <div class="frow"><label>Motion push cooldown (sec)</label><input id="s_mcool" type="number" min="0" value="${a.motion_push_cooldown}"><span class="hint">0 = push every detected event</span></div>
+      <div class="frow"><label>Push motion snapshots</label><input id="s_mpush" type="checkbox" ${a.motion_push ? 'checked' : ''}><span class="sub">send a photo notification when motion is detected</span></div>
+      <div class="frow"><label>Motion push cooldown (sec)</label><input id="s_mcool" type="number" min="0" value="${a.motion_push_cooldown}"><span class="sub">0 = push every detected event</span></div>
       <div class="frow"><button class="btn" id="s_save">Save alerts</button><button class="btn" id="s_test">Send test alert</button><span class="saved" id="s_amsg"></span></div>
     </div>
-    <div class="card">
+    <div class="scard">
       <h3>Motion detection</h3>
-      <p class="hint">Marks activity on the playback timeline. ${m.enabled ? '' : '<b>Disabled</b> — enable in config.yml and restart.'} Sensitivity is lower = more sensitive.</p>
+      <p class="hint">Marks activity on the timeline and builds incidents. ${m.enabled ? '' : '<b>Disabled</b> — enable in config.yml and restart.'} Lower sensitivity = more sensitive.</p>
       <div class="frow"><label>Sensitivity</label><input id="s_sens" type="range" min="1" max="20" step="0.5" value="${Math.min(20, Math.max(1, m.sensitivity))}"><span class="rangeval" id="s_sens_v">${m.sensitivity}</span></div>
       <div class="rangehint"><span>◀ more sensitive (smaller motion)</span><span>less ▶</span></div>
-      <div class="frow"><label></label><span class="hint">Typical 2–8. Raise if a camera logs too many events; lower to catch subtle motion.</span></div>
-      <div class="frow"><label>Merge gap (sec)</label><input id="s_gap" type="number" min="1" value="${m.min_gap_seconds}"><span class="hint">burst of motion within this many seconds = one event</span></div>
-      <div class="frow"><label>Label person/vehicle</label><input id="s_detect" type="checkbox" ${m.detect ? 'checked' : ''} style="flex:0;width:auto"><span class="hint">on-server object detection tags each event</span></div>
+      <div class="frow"><label></label><span class="sub">Typical 2–8. Raise if a camera logs too many events; lower to catch subtle motion.</span></div>
+      <div class="frow"><label>Merge gap (sec)</label><input id="s_gap" type="number" min="1" value="${m.min_gap_seconds}"><span class="sub">burst of motion within this many seconds = one event</span></div>
+      <div class="frow"><label>Label person/vehicle</label><input id="s_detect" type="checkbox" ${m.detect ? 'checked' : ''}><span class="sub">on-server object detection tags each event</span></div>
       <div class="frow"><button class="btn" id="s_savem">Save motion</button><span class="saved" id="s_mmsg"></span></div>
     </div>
-    <div class="card">
+    <div class="scard">
       <h3>Retention</h3>
       <p class="hint">Oldest footage is deleted first. 0 = unlimited.</p>
       <div class="frow"><label>Keep days</label><input id="s_days" type="number" min="0" value="${r.max_days}"></div>
@@ -667,25 +1484,21 @@ async function renderSettings() {
       <div class="frow"><label>Keep free GB</label><input id="s_free" type="number" min="0" value="${r.min_free_gb}"></div>
       <div class="frow"><button class="btn" id="s_saver">Save retention</button><span class="saved" id="s_rmsg"></span></div>
     </div>
-    <div class="card">
+    <div class="scard">
       <h3>Cameras</h3>
-      <p class="hint">Per-camera tuning. Rotation applies everywhere (live, snapshots, thumbnails, playback) and syncs across devices. Motion sensitivity 0 = use global (${m.sensitivity}); lower = more sensitive.</p>
+      <p class="hint">Per-camera tuning. Rotation applies everywhere (live, snapshots, thumbnails, playback) and syncs across devices. Motion sensitivity "global" = ${m.sensitivity}; lower = more sensitive.</p>
       <div id="camsettings"></div>
       <p class="hint" style="margin-top:12px">Image settings (brightness, night mode/IR, WDR, encoding bitrate/resolution) live on the NVR and need its HTTP/ISAPI port enabled — not available while that port is closed.</p>
     </div>`;
   const syncNotifierFields = () => {
     const n = $('#s_notifier').value;
-    document.querySelectorAll('#settings .nf').forEach(el => {
-      el.style.display = el.classList.contains('nf-' + n) ? '' : 'none';
-    });
+    document.querySelectorAll('#settings .nf').forEach(el => { el.style.display = el.classList.contains('nf-' + n) ? '' : 'none'; });
   };
   $('#s_notifier').onchange = syncNotifierFields; syncNotifierFields();
-
   const save = async (patch, msgEl) => {
     msgEl.textContent = 'Saving…'; msgEl.style.color = '';
-    try { await fetch('api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
-            .then(r => { if (!r.ok) throw new Error(r.status); }); msgEl.textContent = '✓ saved'; }
-    catch (e) { msgEl.textContent = 'save failed (' + e.message + ')'; msgEl.style.color = 'var(--bad)'; }
+    try { await post('api/config', patch); msgEl.textContent = '✓ saved'; }
+    catch (e) { msgEl.textContent = 'save failed (' + e.message + ')'; msgEl.style.color = 'var(--head)'; }
     setTimeout(() => { msgEl.textContent = ''; }, 4000);
   };
   $('#s_save').onclick = () => save({ alerts: {
@@ -695,17 +1508,13 @@ async function renderSettings() {
     motion_push: $('#s_mpush').checked, motion_push_cooldown: +$('#s_mcool').value } }, $('#s_amsg'));
   $('#s_test').onclick = async () => {
     const el = $('#s_amsg'); el.textContent = 'sending…'; el.style.color = '';
-    try { const r = await fetch('api/alerts/test', { method: 'POST' }); const j = await r.json();
-      if (!r.ok) throw new Error((await r.text()).slice(0, 120));
-      el.textContent = j.delivered ? '✓ sent via ' + j.notifier : 'notifier is "none" — pick & save one first';
-    } catch (e) { el.textContent = 'failed: ' + e.message; el.style.color = 'var(--bad)'; }
+    try { const j = await post('api/alerts/test', {}); el.textContent = j.delivered ? '✓ sent via ' + j.notifier : 'notifier is "none" — pick & save one first'; }
+    catch (e) { el.textContent = 'failed: ' + e.message; el.style.color = 'var(--head)'; }
     setTimeout(() => { el.textContent = ''; }, 6000);
   };
   $('#s_sens').oninput = () => { $('#s_sens_v').textContent = $('#s_sens').value; };
   $('#s_savem').onclick = () => save({ motion: { sensitivity: +$('#s_sens').value, min_gap_seconds: +$('#s_gap').value, detect: $('#s_detect').checked } }, $('#s_mmsg'));
   $('#s_saver').onclick = () => save({ retention: { max_days: +$('#s_days').value, max_gb: +$('#s_maxgb').value, min_free_gb: +$('#s_free').value } }, $('#s_rmsg'));
-
-  // Per-camera blocks
   const cs = $('#camsettings');
   const gsens = Math.min(20, Math.max(1, m.sensitivity));
   for (const c of cfg.settings.cameras) {
@@ -727,26 +1536,52 @@ async function renderSettings() {
     sens.oninput = () => { sv.textContent = sens.value; };
     gl.onchange = () => { sens.disabled = gl.checked; sv.textContent = gl.checked ? 'global' : sens.value; };
     b.querySelector('.c_save').onclick = () => save({ cameras: { [c.id]: {
-      name: b.querySelector('.c_name').value,
-      rotation: +b.querySelector('.c_rot').value,
+      name: b.querySelector('.c_name').value, rotation: +b.querySelector('.c_rot').value,
       motion_sensitivity: gl.checked ? 0 : +sens.value } } }, b.querySelector('.c_msg'))
-      .then(() => { camRot[c.id] = +b.querySelector('.c_rot').value; });
+      .then(() => { camRot[c.id] = +b.querySelector('.c_rot').value; const cam = camById(c.id); if (cam) cam.name = b.querySelector('.c_name').value; });
     cs.appendChild(b);
   }
 }
 
+// ---------------------------------------------------------------- tabs + boot
+function tab(name) {
+  for (const n of ['cameras', 'saved', 'settings']) {
+    $('#' + n).classList.toggle('hidden', name !== n);
+    document.querySelector(`nav.main a[data-tab="${n}"]`).classList.toggle('on', name === n);
+  }
+  if (name === 'cameras') {
+    for (const c of cameras) { tiles[c.id].el.querySelector('.name').textContent = c.name; }
+    layoutGrid(); goLive();
+  } else {
+    // Stop streaming while away from the cameras page.
+    for (const c of cameras) { const t = tiles[c.id]; if (t.hls) { t.hls.destroy(); t.hls = null; } t.video.removeAttribute('src'); t.video.load(); t.state = 'idle'; }
+  }
+  if (name === 'saved') renderSaved();
+  if (name === 'settings') renderSettings();
+}
+const tabFromHash = () => (['saved', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'cameras');
+window.addEventListener('hashchange', () => tab(tabFromHash()));
+
 (async () => {
+  if (isWall) document.body.classList.add('wall');
   try {
     await loadCameras();
-    $('#cam').innerHTML = cameras.map(c => `<option value="${c.id}">${c.name.replace(/</g,'&lt;')}</option>`).join('');
-    tab('live');
+    S.dayStart = todayStart();
+    buildGrid();
+    tab(isWall ? 'cameras' : tabFromHash());
     const l = $('#loading'); l.classList.add('gone'); setTimeout(() => l.classList.add('hidden'), 400);
+    refreshData();
   } catch (e) {
     $('#loading').querySelector('.lmsg').textContent = 'Failed to load (' + e.message + '). Retrying…';
     setTimeout(() => location.reload(), 4000);
     return;
   }
-  setInterval(async () => { if (!$('#live').classList.contains('hidden')) { await loadCameras(); updateStatus(); } }, 10000);
+  setInterval(syncTick, 250);
+  setInterval(() => { if (S.mode === 'live') renderClock(); }, 1000);
+  setInterval(() => { if (isToday() && !$('#cameras').classList.contains('hidden')) refreshData(); }, 20000);
+  setInterval(() => loadCameras().catch(() => {}), 15000);
+  let wasPhone = isPhone();
+  window.addEventListener('resize', () => { if (isPhone() !== wasPhone) { wasPhone = isPhone(); layoutGrid(); renderTimeline(); } });
 })();
 </script>
 </body>
