@@ -1,109 +1,135 @@
 # homenvr
 
-A self-hosted replacement for the Hikvision phone app. It records your cameras
-straight to your own server over RTSP, so you get unlimited storage (NAS / rack
-disk), fast local playback, and no cloud relay, ads, or upselling.
+A self-hosted replacement for the Hikvision phone app. homenvr records your
+cameras straight to your own server over RTSP, so you get **unlimited storage**
+(NAS / rack disk), **fast local playback**, a **motion timeline**, **push alerts
+with snapshots**, and **remote access** — with no cloud relay, no ads, and no
+upselling.
 
-Built for a **DS-7804N-S1/W(B)** NVR with three **DS-IPC-K24H-LWT** cameras, but
-works with any Hikvision (or ONVIF/RTSP) NVR. See [PROTOCOL.md](PROTOCOL.md) for
-how the device was investigated and how the pieces communicate.
+Built and tested against a **DS-7804N-S1/W(B)** NVR with three
+**DS-IPC-K24H-LWT** cameras, but works with any Hikvision (or ONVIF/RTSP) NVR or
+IP camera. See [PROTOCOL.md](PROTOCOL.md) for how the device was investigated and
+how the camera↔NVR communication works.
 
-## Why it's faster than the app
+> Not affiliated with or endorsed by Hikvision. homenvr only **reads** streams
+> from your NVR using credentials you supply; it never modifies the device or its
+> firmware.
 
-Your NVR has ports 80 and 8000 closed, so the phone app routes every stream
-through the Hik-Connect cloud (ports 9010/9020) even when you're at home.
-homenvr connects to RTSP (port 554) **directly on your LAN** — no round trip to
-a cloud server, no ads.
+## Why
 
-## What you need
+The stock app routes video through the Hik-Connect cloud even on your own LAN
+(the NVR's web/SDK ports are typically closed), which makes playback slow and
+flaky, and the SD card fills in days. homenvr connects **directly over LAN RTSP**
+and stores recordings on hardware you control.
 
-- A Linux box with Docker (your rack server).
-- Network reachability to the NVR (`192.168.1.64`).
-- The NVR **admin password**. The device is "activated", so there is no factory
-  default — if you don't have it, recover it via the Hik-Connect app's *Forgot
-  password*, the NVR's local HDMI/monitor menu, or Hikvision's SADP reset. See
-  "Getting the password" below.
+## Features
+
+- **Live view** — multi-camera grid, low-latency HLS. Per-camera **rotate**
+  (for sideways-mounted cameras), **digital zoom + pan** (scroll/pinch/buttons),
+  fullscreen.
+- **Playback** — timeline scrubber with instant local seeking (no "failed to
+  grab recording"), day navigation, **motion-event markers** with jump-to-motion.
+- **Motion detection** — server-side (ffmpeg frame-differencing on the sub-stream,
+  no NVR changes); marks the timeline and can trigger alerts.
+- **Push alerts** — ntfy, Discord, Telegram, or email, when a camera stops
+  recording / the disk fills, and **snapshot photo pushes on motion**.
+- **Clip export** — download any time range as an MP4.
+- **Permanent "saved" clips** — keep important footage (by time range or by
+  jumping to a motion event); never auto-deleted.
+- **Two-stage retention** — footage past your day/size limits moves to a **grace**
+  area (reversible), and is hard-deleted only under real disk pressure, in
+  batches — no constant trickle deletion.
+- **Remote access** — watch from anywhere via Tailscale or Cloudflare Tunnel; no
+  cloud, no open ports. See [docs/remote-access.md](docs/remote-access.md).
+- **Settings page** — configure alerts (incl. Telegram/Discord), motion, and
+  retention from the browser; changes apply live.
+- **SD-card backfill** — import footage already on the NVR before it rotates away.
+
+## Requirements
+
+- A Linux host with Docker + Docker Compose (a NAS, a rack server, a mini PC…).
+- Network reachability to the NVR/camera.
+- The NVR **admin password** (RTSP credentials). On modern Hikvision devices the
+  password was set at activation — there is no factory default.
 
 ## Quick start
 
 ```bash
-cd homenvr
-cp .env.example .env            # set NVR_PASSWORD, UI_PASSWORD, TZ, RECORDINGS_DIR
-cp config.example.yml config.yml # adjust cameras / retention if needed
+git clone https://github.com/ushiosoft/hikvision-homenvr.git
+cd hikvision-homenvr
+cp .env.example .env              # set NVR_PASSWORD, UI_PASSWORD, TZ, RECORDINGS_DIR
+cp config.example.yml config.yml  # set NVR host + cameras
 docker compose up -d --build
 ```
 
-Open `http://<server-ip>:8080` (log in with `admin` + your `UI_PASSWORD`).
-Point `RECORDINGS_DIR` in `.env` at your NAS mount or a big disk.
+Open `http://<host>:8971` (or from your phone on the same network). Log in with
+the UI credentials from `.env`. Point `RECORDINGS_DIR` at your NAS/disk for
+unlimited storage.
 
 ## Configuration
 
-Everything lives in `config.yml` (secrets come from `.env` via `${VAR}`):
+`config.yml` is the base config (secrets come from `.env` via `${VAR}`). The
+**Settings** page writes a runtime overlay for alerts/motion/retention, so you
+rarely need to edit the file after setup. Key sections:
 
-- **cameras** — one entry per NVR channel. `live_codec: h264` transcodes live
-  view if your browser can't play H.265; `audio: none|aac|copy`.
-- **retention** — `max_days`, `max_gb`, `min_free_gb`. Oldest segments are
-  deleted first; the newest (being written) is always kept.
-- **segment_seconds** — recording file length (default 600 = 10 min).
+```yaml
+nvr: { host: 192.168.1.64, port: 554, username: admin, password: ${NVR_PASSWORD} }
+cameras:
+  - { id: cam1, name: Front, channel: 1, live_codec: h264 }   # one per NVR channel
+segment_seconds: 600
+retention: { max_days: 60, max_gb: 0, min_free_gb: 20 }        # whichever limit hits first
+motion:    { enabled: true, sensitivity: 4.0 }
+alerts:    { notifier: none }                                  # ntfy | webhook | telegram | smtp
+ui:        { username: admin, password: ${UI_PASSWORD} }
+```
 
-## Importing footage already on the SD card
+See `config.example.yml` for all options (per-camera `live_codec`/`audio`,
+custom RTSP URLs, SMTP, motion-snapshot push, etc.).
 
-Pulls existing recordings off the NVR via its playback API (runs at ~1x speed,
-resumable, skips chunks already on disk):
+### Backfill the SD card
 
 ```bash
 docker compose exec homenvr python -m app.importer \
   --camera cam1 --from "2026-10-01 00:00" --to "2026-10-02 00:00"
 ```
 
-Times are in the NVR's local timezone.
+## How it works
 
-## Getting the password
+Your agent connects to the NVR's RTSP endpoints (`/Streaming/Channels/<ch>01`
+live, `/Streaming/tracks/<ch>01?starttime=…` playback), records the main stream
+to fragmented MP4 segments, and remuxes the sub-stream to HLS for live view.
+Details and the discovery process are in [PROTOCOL.md](PROTOCOL.md);
+planned work is in [ROADMAP.md](ROADMAP.md).
 
-The NVR reports `Activated: true`, meaning a password was set at setup — the old
-`12345` / `12345678` defaults do **not** apply. Recover it through one of:
-
-1. **Hik-Connect app** → device settings / *Forgot password* (uses your account).
-2. **Local menu** — plug a monitor + USB mouse into the NVR; set/reset there and
-   enable RTSP while you're in.
-3. **SADP tool** — official Hikvision owner-reset flow (`PasswordResetAbility`
-   is true on this unit).
-
-## Enhancements
-
-- **Motion events + smart timeline** — server-side motion detection marks activity
-  on the playback timeline; click a marker or use ◀/▶ motion to jump between events.
-  Tune in `config.yml` under `motion:`.
-- **Health alerts** — get notified (ntfy / webhook / email) if a camera stops
-  recording or the disk fills. Configure under `alerts:`; test via `POST /api/alerts/test`.
-- **Remote access** — watch from anywhere via Tailscale or Cloudflare Tunnel, no
-  cloud and no open ports. See [docs/remote-access.md](docs/remote-access.md).
-
-## Architecture
-
-| File | Role |
+| Component | Role |
 | --- | --- |
-| `app/config.py` | Config + `.env` interpolation; builds RTSP URLs |
-| `app/storage.py` | Segment index, retention, clip export |
-| `app/recorder.py` | ffmpeg supervision (record + live), auto-restart |
-| `app/importer.py` | Backfill from the NVR's SD card |
+| `app/recorder.py` | ffmpeg supervision (record + live), snapshots, watchdog |
+| `app/storage.py` | segment index, two-stage retention, grace/saved, export |
+| `app/motion.py` / `app/events.py` | motion detection + event store |
+| `app/alerts.py` | notifiers (ntfy/Discord/Telegram/SMTP) + health watchdog |
+| `app/settings.py` | runtime-editable config overlay |
 | `app/main.py` | HTTP API + web UI |
-| `app/static/` | Single-page UI (live grid, timeline scrubber, export) |
+| `app/static/` | single-page UI |
 
 ## Development
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                 # unit tests (config, storage, API)
-tests/e2e/             # docker-compose stack with a simulated NVR + cameras
+pytest                       # unit tests
+tests/e2e/                   # docker-compose stack with a simulated NVR + cameras
 ```
 
-The e2e stack (`tests/e2e/docker-compose.yml`) runs MediaMTX as a fake Hikvision
-NVR with synthetic HEVC/H.264 cameras and exercises the full record → playback →
-export path. It was used to validate this build end to end.
+The e2e stack runs MediaMTX as a fake Hikvision NVR with synthetic cameras and
+exercises record → playback → export end to end.
 
-## Scope and safety
+## Security
 
-homenvr only **reads** streams from the NVR using credentials you supply. It does
-not modify the device, its firmware, or its configuration. Keep `.env` and
-`config.yml` out of version control (they're gitignored).
+- Set a strong `UI_PASSWORD` before exposing homenvr beyond your LAN; prefer
+  Tailscale/Cloudflare Access over a bare port-forward.
+- Keep the NVR off the public internet — homenvr is the only thing that needs to
+  be reachable, and only to you.
+- `.env`, `config.yml`, `recordings/`, and the settings overlay are gitignored.
+
+## License
+
+MIT
