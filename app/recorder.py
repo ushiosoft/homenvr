@@ -5,6 +5,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import subprocess
 import shutil
 import time
 from collections import deque
@@ -18,14 +20,36 @@ log = logging.getLogger(__name__)
 
 FFMPEG = os.environ.get("FFMPEG", "ffmpeg")
 FFPROBE = os.environ.get("FFPROBE", "ffprobe")
-RTSP_TIMEOUT_US = "10000000"  # 10 s socket timeout so dead streams get restarted
+RTSP_TIMEOUT_US = "10000000"  # 10 s socket I/O timeout, in microseconds.
+
+
+def _ffmpeg_major() -> int:
+    try:
+        out = subprocess.run([FFMPEG, "-version"], capture_output=True, text=True).stdout
+        m = re.search(r"version\s+n?(\d+)", out)
+        return int(m.group(1)) if m else 5
+    except Exception:
+        return 5
+
+
+# The RTSP socket I/O timeout flag is version-dependent and the name collides
+# with unrelated options, so we pick it once from the ffmpeg version:
+#   - ffmpeg 5+ : -timeout   (microseconds; socket I/O timeout for the RTSP demuxer)
+#   - ffmpeg 4.x: -stimeout  (-timeout there means *listen* timeout -> server mode,
+#                 "Unable to open RTSP for listening"; -rw_timeout isn't accepted
+#                 as an RTSP input option)
+_TIMEOUT_FLAG = "-timeout" if _ffmpeg_major() >= 5 else "-stimeout"
+
+
+def socket_timeout_args() -> list[str]:
+    return [_TIMEOUT_FLAG, RTSP_TIMEOUT_US]
 
 
 def input_args(url: str, transport: str) -> list[str]:
     # genpts/discardcorrupt: camera RTSP streams often start with packets that
     # have no PTS or are damaged by WiFi loss.
     return ["-avoid_negative_ts", "make_zero", "-fflags", "+genpts+discardcorrupt",
-            "-rtsp_transport", transport, "-timeout", RTSP_TIMEOUT_US, "-i", url]
+            "-rtsp_transport", transport, *socket_timeout_args(), "-i", url]
 
 
 def redact(text: str) -> str:
@@ -38,7 +62,7 @@ def redact(text: str) -> str:
 async def probe(url: str, transport: str = "tcp", timeout: float = 20) -> dict:
     """Return {'video': codec, 'width', 'height', 'audio': codec|None} for an RTSP URL."""
     proc = await asyncio.create_subprocess_exec(
-        FFPROBE, "-v", "error", "-rtsp_transport", transport, "-timeout", RTSP_TIMEOUT_US,
+        FFPROBE, "-v", "error", "-rtsp_transport", transport, *socket_timeout_args(),
         "-show_entries", "stream=codec_type,codec_name,width,height", "-of", "json", url,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )

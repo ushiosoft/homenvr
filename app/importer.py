@@ -22,7 +22,7 @@ import sys
 from datetime import datetime, timedelta
 
 from . import config as config_mod
-from .recorder import FFMPEG, FFPROBE, RTSP_TIMEOUT_US, redact
+from .recorder import FFMPEG, FFPROBE, redact, socket_timeout_args
 from .storage import Storage, format_stamp
 
 log = logging.getLogger("homenvr.importer")
@@ -53,7 +53,7 @@ async def import_chunk(cfg, storage: Storage, cam, start: datetime, end: datetim
     tmp = dst.with_suffix(".part")
     url = playback_url(cfg, cam.channel, start, end)
     cmd = [FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "warning", "-rtsp_transport", "tcp",
-           "-timeout", RTSP_TIMEOUT_US, "-i", url, "-map", "0:v:0", "-c:v", "copy",
+           *socket_timeout_args(), "-i", url, "-map", "0:v:0", "-c:v", "copy",
            "-t", str((end - start).total_seconds()), "-f", "mp4",
            "-movflags", "+frag_keyframe+empty_moov+default_base_moof", str(tmp)]
     log.info("import %s %s → %s", cam.id, start, redact(url))
