@@ -73,7 +73,7 @@ class Alerts:
 class Motion:
     enabled: bool = False
     # "scene" score threshold (0-1); higher = less sensitive. ffmpeg scdet.
-    sensitivity: float = 0.08
+    sensitivity: float = 4.0  # frame-difference brightness threshold (0-255); higher = less sensitive
     min_gap_seconds: float = 8.0  # merge detections closer than this into one event
     cooldown_seconds: float = 3.0
 
@@ -172,7 +172,7 @@ def parse(raw: dict) -> Config:
         ),
         motion=Motion(
             enabled=bool(m.get("enabled", False)),
-            sensitivity=float(m.get("sensitivity", 0.08)),
+            sensitivity=float(m.get("sensitivity", 4.0)),
             min_gap_seconds=float(m.get("min_gap_seconds", 8.0)),
             cooldown_seconds=float(m.get("cooldown_seconds", 3.0)),
         ),

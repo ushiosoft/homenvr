@@ -226,11 +226,17 @@ class Supervisor:
     def __init__(self, cfg: Config, storage: Storage):
         self.cfg, self.storage = cfg, storage
         self.workers: dict[tuple[str, str], Worker] = {}
+        self.motion: dict[str, object] = {}
+        self.events = None  # EventStore, set in start() if motion enabled
         self._tasks: list[asyncio.Task] = []
 
     async def start(self) -> None:
         if not shutil.which(FFMPEG):
             raise RuntimeError("ffmpeg not found")
+        if self.cfg.motion.enabled:
+            from .events import EventStore
+            from .motion import MotionDetector
+            self.events = EventStore(self.cfg.events_db)
         for cam in self.cfg.cameras:
             if not cam.enabled:
                 continue
@@ -238,6 +244,10 @@ class Supervisor:
                 w = Worker(cam, self.cfg, kind, out)
                 self.workers[(cam.id, kind)] = w
                 self._tasks.append(asyncio.create_task(w.run(), name=f"{cam.id}-{kind}"))
+            if self.cfg.motion.enabled:
+                md = MotionDetector(cam, self.cfg, self.events)
+                self.motion[cam.id] = md
+                self._tasks.append(asyncio.create_task(md.run(), name=f"{cam.id}-motion"))
         self._tasks.append(asyncio.create_task(self._retention_loop(), name="retention"))
         self._tasks.append(asyncio.create_task(self._watchdog_loop(), name="watchdog"))
 
@@ -246,6 +256,8 @@ class Supervisor:
         while True:
             try:
                 await asyncio.to_thread(self.storage.enforce_retention, r.max_gb, r.max_days, r.min_free_gb)
+                if self.events is not None and r.max_days > 0:
+                    await asyncio.to_thread(self.events.prune, time.time() - r.max_days * 86400)
             except Exception:
                 log.exception("retention failed")
             await asyncio.sleep(60)

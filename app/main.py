@@ -86,6 +86,17 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         return [{"name": s.path.name, "start": s.start, "end": s.end, "size": s.size,
                  "url": f"recordings/{cam_id}/{s.path.name}"} for s in segs]
 
+    @app.get("/api/cameras/{cam_id}/events")
+    async def events(cam_id: str, start: float = Query(...), end: float = Query(...)):
+        camera_or_404(cam_id)
+        store = sup.events
+        if store is None:
+            from .events import EventStore
+            if not cfg.events_db.exists():
+                return []
+            store = EventStore(cfg.events_db)
+        return await asyncio.to_thread(store.query, cam_id, start, end)
+
     @app.get("/recordings/{cam_id}/{name}")
     async def recording(cam_id: str, name: str):
         camera_or_404(cam_id)

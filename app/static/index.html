@@ -30,6 +30,8 @@
   #timeline { position:relative; height:44px; background:var(--panel); border:1px solid var(--line); border-radius:6px; margin-top:10px; cursor:pointer; user-select:none; }
   #timeline .seg { position:absolute; top:8px; bottom:16px; background:var(--accent); opacity:.55; }
   #timeline .cursor { position:absolute; top:0; bottom:0; width:2px; background:var(--bad); }
+  #timeline .evt { position:absolute; top:2px; width:3px; height:11px; margin-left:-1px; background:#f59e0b; border-radius:1px; cursor:pointer; }
+  #timeline .evt:hover { height:15px; background:#fbbf24; }
   #timeline .tick { position:absolute; bottom:0; font-size:10px; color:var(--muted); transform:translateX(-50%); }
   #now { color:var(--muted); font-variant-numeric:tabular-nums; }
   .hidden { display:none; }
@@ -48,6 +50,7 @@
       <select id="cam"></select>
       <input id="day" type="date">
       <button class="btn" id="prev">◀ day</button><button class="btn" id="next">day ▶</button>
+      <button class="btn" id="prevEvt" title="previous motion">◀ motion</button><button class="btn" id="nextEvt" title="next motion">motion ▶</button>
       <span id="now"></span>
       <span style="flex:1"></span>
       <label>Export <input id="exlen" type="number" value="60" min="1" max="360" style="width:64px"> s from cursor</label>
@@ -130,7 +133,7 @@ function updateStatus() {
 }
 
 // ---- playback ----
-let segs = [], dayStart = 0, current = null;
+let segs = [], events = [], dayStart = 0, current = null;
 const DAY = 86400;
 
 function setDay(d) { // d: Date at local midnight
@@ -141,6 +144,8 @@ function setDay(d) { // d: Date at local midnight
 async function loadDay() {
   const cam = $('#cam').value;
   segs = await api(`api/cameras/${cam}/segments?start=${dayStart}&end=${dayStart + DAY}`);
+  try { events = await api(`api/cameras/${cam}/events?start=${dayStart}&end=${dayStart + DAY}`); }
+  catch { events = []; }
   drawTimeline();
 }
 function drawTimeline() {
@@ -154,8 +159,21 @@ function drawTimeline() {
     el.style.left = ((a - dayStart)/DAY*100) + '%'; el.style.width = Math.max(0.1, (b - a)/DAY*100) + '%';
     tl.appendChild(el);
   }
+  for (const e of events) {
+    const m = document.createElement('div'); m.className = 'evt';
+    m.style.left = ((e.ts - dayStart)/DAY*100) + '%';
+    m.title = `motion ${fmtTime(e.ts)}`;
+    m.onclick = ev => { ev.stopPropagation(); playAt(e.ts); };
+    tl.appendChild(m);
+  }
   const c = document.createElement('div'); c.className = 'cursor'; c.id = 'cursor'; tl.appendChild(c);
   moveCursor();
+}
+function jumpEvent(dir) {
+  if (!events.length) return;
+  const t = playheadTime() || dayStart;
+  const next = dir > 0 ? events.find(e => e.ts > t + 1) : [...events].reverse().find(e => e.ts < t - 1);
+  if (next) playAt(next.ts);
 }
 function playheadTime() { return current ? current.start + $('#player').currentTime : null; }
 function moveCursor() {
@@ -185,6 +203,8 @@ $('#cam').onchange = () => { current = null; loadDay(); };
 $('#day').onchange = e => { const [y,m,d] = e.target.value.split('-').map(Number); setDay(new Date(y, m-1, d)); };
 $('#prev').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()-1); setDay(d); };
 $('#next').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()+1); setDay(d); };
+$('#prevEvt').onclick = () => jumpEvent(-1);
+$('#nextEvt').onclick = () => jumpEvent(1);
 $('#export').onclick = () => {
   const t = playheadTime(); if (!t) return alert('Click the timeline to pick a start point first.');
   location.href = `api/cameras/${$('#cam').value}/export?start=${t}&end=${t + Number($('#exlen').value || 60)}`;
