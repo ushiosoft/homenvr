@@ -123,7 +123,24 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         r = cfg.retention
         return {"storage": await asyncio.to_thread(storage.usage),
                 "retention": {"max_gb": r.max_gb, "max_days": r.max_days, "min_free_gb": r.min_free_gb},
-                "segment_seconds": cfg.segment_seconds}
+                "segment_seconds": cfg.segment_seconds,
+                "alerts": {"notifier": cfg.alerts.notifier},
+                "motion": {"enabled": cfg.motion.enabled}}
+
+    @app.get("/api/health")
+    async def health():
+        from .alerts import build_observer
+        checks = await asyncio.to_thread(build_observer(cfg, sup, storage), time.time())
+        return {"ok": all(c.ok for c in checks),
+                "checks": [{"key": c.key, "ok": c.ok, "message": c.message} for c in checks]}
+
+    @app.post("/api/alerts/test")
+    async def alerts_test():
+        from .alerts import make_notifier
+        n = make_notifier(cfg.alerts)
+        await asyncio.to_thread(n.send, "homenvr test alert",
+                                "This is a test notification from homenvr.", failing=False)
+        return {"sent": True, "notifier": cfg.alerts.notifier}
 
     @app.get("/live/{cam_id}/{name}")
     async def live(cam_id: str, name: str):

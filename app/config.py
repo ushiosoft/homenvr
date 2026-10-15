@@ -60,6 +60,25 @@ class Retention:
 
 
 @dataclass
+class Alerts:
+    notifier: str = "none"  # none | ntfy | webhook | smtp
+    ntfy_url: str = ""
+    webhook_url: str = ""
+    smtp: dict = field(default_factory=dict)
+    stale_segment_seconds: int = 180  # recorder "running" but no new data this long
+    check_interval: int = 60
+
+
+@dataclass
+class Motion:
+    enabled: bool = False
+    # "scene" score threshold (0-1); higher = less sensitive. ffmpeg scdet.
+    sensitivity: float = 0.08
+    min_gap_seconds: float = 8.0  # merge detections closer than this into one event
+    cooldown_seconds: float = 3.0
+
+
+@dataclass
 class Config:
     storage_dir: Path
     live_dir: Path
@@ -70,6 +89,9 @@ class Config:
     ui_username: str = ""
     ui_password: str = ""
     rtsp_transport: str = "tcp"
+    alerts: Alerts = field(default_factory=Alerts)
+    motion: Motion = field(default_factory=Motion)
+    events_db: Path = Path("/recordings/events.db")
 
     def camera(self, cam_id: str) -> Camera | None:
         return next((c for c in self.cameras if c.id == cam_id), None)
@@ -123,8 +145,11 @@ def parse(raw: dict) -> Config:
 
     r = raw.get("retention") or {}
     ui = raw.get("ui") or {}
+    a = raw.get("alerts") or {}
+    m = raw.get("motion") or {}
+    storage_dir = Path(raw.get("storage_dir", "/recordings"))
     return Config(
-        storage_dir=Path(raw.get("storage_dir", "/recordings")),
+        storage_dir=storage_dir,
         live_dir=Path(raw.get("live_dir", "/tmp/homenvr-live")),
         segment_seconds=int(raw.get("segment_seconds", 600)),
         retention=Retention(
@@ -137,6 +162,21 @@ def parse(raw: dict) -> Config:
         ui_username=str(ui.get("username", "")),
         ui_password=str(ui.get("password", "")),
         rtsp_transport=str(raw.get("rtsp_transport", "tcp")),
+        alerts=Alerts(
+            notifier=str(a.get("notifier", "none")),
+            ntfy_url=str(a.get("ntfy_url", "")),
+            webhook_url=str(a.get("webhook_url", "")),
+            smtp=dict(a.get("smtp") or {}),
+            stale_segment_seconds=int(a.get("stale_segment_seconds", 180)),
+            check_interval=int(a.get("check_interval", 60)),
+        ),
+        motion=Motion(
+            enabled=bool(m.get("enabled", False)),
+            sensitivity=float(m.get("sensitivity", 0.08)),
+            min_gap_seconds=float(m.get("min_gap_seconds", 8.0)),
+            cooldown_seconds=float(m.get("cooldown_seconds", 3.0)),
+        ),
+        events_db=Path(raw.get("events_db", str(storage_dir / "events.db"))),
     )
 
 

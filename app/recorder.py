@@ -239,6 +239,7 @@ class Supervisor:
                 self.workers[(cam.id, kind)] = w
                 self._tasks.append(asyncio.create_task(w.run(), name=f"{cam.id}-{kind}"))
         self._tasks.append(asyncio.create_task(self._retention_loop(), name="retention"))
+        self._tasks.append(asyncio.create_task(self._watchdog_loop(), name="watchdog"))
 
     async def _retention_loop(self) -> None:
         r = self.cfg.retention
@@ -248,6 +249,20 @@ class Supervisor:
             except Exception:
                 log.exception("retention failed")
             await asyncio.sleep(60)
+
+    async def _watchdog_loop(self) -> None:
+        from .alerts import Watchdog, build_observer, make_notifier
+
+        notifier = make_notifier(self.cfg.alerts)
+        self.watchdog = Watchdog(build_observer(self.cfg, self, self.storage), notifier)
+        # Grace period so cameras can connect before the first evaluation.
+        await asyncio.sleep(max(20, self.cfg.alerts.check_interval))
+        while True:
+            try:
+                await asyncio.to_thread(self.watchdog.tick)
+            except Exception:
+                log.exception("watchdog failed")
+            await asyncio.sleep(self.cfg.alerts.check_interval)
 
     async def stop(self) -> None:
         await asyncio.gather(*(w.stop() for w in self.workers.values()), return_exceptions=True)
