@@ -112,18 +112,27 @@ def record_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]
     ]
 
 
+HLS_SEG_SECONDS = 2  # segment length; also the forced-keyframe interval
+
+
 def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]:
+    # Force a keyframe exactly at every HLS segment boundary so each segment starts
+    # with an IDR. Without this, a viewer (or a refresh) that starts mid-GOP shows
+    # black until the next keyframe, and can stall there.
+    keyframes = ["-force_key_frames", f"expr:gte(t,n_forced*{HLS_SEG_SECONDS})"]
     if cam.live_codec == "h264" and info["video"] != "h264":
         video = ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
-                 "-g", "25", "-sc_threshold", "0", "-b:v", "1500k"]
+                 "-sc_threshold", "0", "-b:v", "1500k", *keyframes]
     else:
+        # copy: can't insert keyframes, but still align segments to existing IDRs
         video = ["-c:v", "copy", *_video_tag(info["video"])]
     return [
         FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "warning",
         *input_args(cam.live_url, cfg.rtsp_transport),
         "-map", "0:v:0", *video, "-an",
-        "-f", "hls", "-hls_time", "1", "-hls_list_size", "6",
-        "-hls_flags", "delete_segments+omit_endlist+independent_segments",
+        "-f", "hls", "-hls_time", str(HLS_SEG_SECONDS), "-hls_list_size", "8",
+        # split_by_time: don't wait past hls_time for a keyframe on copy streams.
+        "-hls_flags", "delete_segments+omit_endlist+independent_segments+split_by_time",
         "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
         str(out_dir / "index.m3u8"),
     ]

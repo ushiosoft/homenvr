@@ -66,11 +66,34 @@ const pad = n => String(n).padStart(2, '0');
 const fmtTime = t => { const d = new Date(t*1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 let cameras = [], hlsPlayers = [];
 
+function tryPlay(video) {
+  // Chrome's autoplay policy blocks concurrent autoplay unless muted is set as a
+  // *property* (the HTML attribute alone races). Set it, then play() with catch.
+  video.muted = true;
+  const p = video.play();
+  if (p) p.catch(() => {
+    // Autoplay still blocked: show a one-tap overlay on this tile.
+    const tile = video.closest('.tile');
+    if (tile && !tile.querySelector('.playtap')) {
+      const b = document.createElement('button');
+      b.className = 'playtap'; b.textContent = '▶ Tap to play';
+      b.onclick = () => { video.muted = true; video.play(); b.remove(); };
+      tile.appendChild(b);
+    }
+  });
+}
+
 function attach(video, src) {
-  if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = src; return null; }
+  video.muted = true;
+  if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = src;
+    video.addEventListener('loadedmetadata', () => tryPlay(video), { once: true });
+    return null;
+  }
   if (window.Hls && Hls.isSupported()) {
     const h = new Hls({ liveSyncDurationCount: 2, maxLiveSyncPlaybackRate: 1.5 });
     h.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setTimeout(() => { h.loadSource(src); h.startLoad(); }, 3000); });
+    h.on(Hls.Events.MANIFEST_PARSED, () => tryPlay(video));
     h.loadSource(src); h.attachMedia(video); return h;
   }
   return null;

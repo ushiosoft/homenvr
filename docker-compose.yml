@@ -8,7 +8,7 @@ services:
     environment:
       TZ: ${TZ:-America/Toronto}
     ports:
-      - "8080:8080"
+      - "8971:8080"
     volumes:
       - ./config.yml:/config/config.yml:ro
       - ${RECORDINGS_DIR:-./recordings}:/recordings
