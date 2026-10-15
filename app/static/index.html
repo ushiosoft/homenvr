@@ -46,14 +46,17 @@
   #playerWrap { position:relative; overflow:hidden; background:#000; border-radius:8px; }
   #player { width:100%; max-height:70vh; display:block; background:#000; transform-origin:center center; will-change:transform; }
   #playerWrap.zoomed #player { cursor:grab; }
-  #timeline { position:relative; height:44px; background:var(--panel); border:1px solid var(--line); border-radius:6px; margin-top:10px; cursor:pointer; user-select:none; }
-  #timeline .seg { position:absolute; top:8px; bottom:16px; background:var(--accent); opacity:.55; }
-  #timeline .cursor { position:absolute; top:0; bottom:0; width:2px; background:var(--bad); }
-  #timeline .evt { position:absolute; top:2px; width:3px; height:11px; margin-left:-1px; background:#f59e0b; border-radius:1px; cursor:pointer; }
-  #timeline .evt:hover { height:15px; background:#fbbf24; }
-  #timeline .tick { position:absolute; bottom:0; font-size:10px; color:var(--muted); transform:translateX(-50%); }
   #now { color:var(--muted); font-variant-numeric:tabular-nums; }
-  #events { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin-top:12px; }
+  /* Playback browse: a vertical day-rail (left) next to the newest-first event grid */
+  #pbbrowse { display:flex; gap:12px; margin-top:12px; align-items:stretch; }
+  #rail { position:relative; width:54px; flex:none; background:var(--panel); border:1px solid var(--line); border-radius:6px; cursor:pointer; user-select:none; touch-action:none; min-height:460px; }
+  #rail .seg { position:absolute; left:34px; right:6px; background:var(--accent); opacity:.5; border-radius:2px; }
+  #rail .evt { position:absolute; left:20px; width:10px; height:3px; margin-top:-1px; background:#f59e0b; border-radius:1px; }
+  #rail .evt.person { background:#22c55e; } #rail .evt.vehicle { background:#60a5fa; }
+  #rail .tick { position:absolute; left:4px; font-size:9px; color:var(--muted); transform:translateY(-50%); }
+  #rail .cursor { position:absolute; left:0; right:0; height:0; border-top:2px solid var(--bad); }
+  #rail .cursor::after { content:''; position:absolute; right:2px; top:-4px; border:4px solid transparent; border-right-color:var(--bad); }
+  #events { flex:1; display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; align-content:start; }
   .evhdr { grid-column:1/-1; color:var(--muted); font-size:12px; margin:6px 0 2px; }
   .evcard { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; cursor:pointer; }
   .evcard img { width:100%; aspect-ratio:16/9; object-fit:cover; background:#0b0d10; display:block; }
@@ -122,8 +125,7 @@
       <button class="btn" id="keep" title="Save permanently (never auto-deleted)">★ Keep</button>
     </div>
     <div id="playerWrap"><video id="player" controls playsinline muted></video></div>
-    <div id="timeline"></div>
-    <div id="events"></div>
+    <div id="pbbrowse"><div id="rail"></div><div id="events"></div></div>
   </section>
   <section id="saved" class="hidden"></section>
   <section id="settings" class="hidden"></section>
@@ -319,7 +321,7 @@ async function loadDay() {
   segs = await api(`api/cameras/${cam}/segments?start=${dayStart}&end=${dayStart + DAY}`);
   try { events = await api(`api/cameras/${cam}/events?start=${dayStart}&end=${dayStart + DAY}`); }
   catch { events = []; }
-  drawTimeline();
+  drawRail();
   renderEvents();
 }
 
@@ -351,7 +353,7 @@ function renderEvents() {
   }, { rootMargin: '200px' });
 
   let lastHour = -1;
-  for (const e of shown) {
+  for (const e of [...shown].reverse()) {   // newest first
     const hr = new Date(e.ts * 1000).getHours();
     if (hr !== lastHour) {
       lastHour = hr;
@@ -375,25 +377,26 @@ function renderEvents() {
     root.appendChild(card);
   }
 }
-function drawTimeline() {
-  const tl = $('#timeline'); tl.innerHTML = '';
+function drawRail() {  // vertical day rail: 00:00 top -> 24:00 bottom
+  const rl = $('#rail'); rl.innerHTML = '';
   for (let h = 0; h <= 24; h += 3) {
-    const k = document.createElement('div'); k.className = 'tick'; k.style.left = (h/24*100) + '%'; k.textContent = pad(h)+':00'; tl.appendChild(k);
+    const k = document.createElement('div'); k.className = 'tick'; k.style.top = (h/24*100) + '%'; k.textContent = pad(h); rl.appendChild(k);
   }
   for (const s of segs) {
     const el = document.createElement('div'); el.className = 'seg';
     const a = Math.max(s.start, dayStart), b = Math.min(s.end, dayStart + DAY);
-    el.style.left = ((a - dayStart)/DAY*100) + '%'; el.style.width = Math.max(0.1, (b - a)/DAY*100) + '%';
-    tl.appendChild(el);
+    el.style.top = ((a - dayStart)/DAY*100) + '%'; el.style.height = Math.max(0.3, (b - a)/DAY*100) + '%';
+    rl.appendChild(el);
   }
   for (const e of events) {
-    const m = document.createElement('div'); m.className = 'evt';
-    m.style.left = ((e.ts - dayStart)/DAY*100) + '%';
-    m.title = `motion ${fmtTime(e.ts)}`;
-    m.onclick = ev => { ev.stopPropagation(); playAt(e.ts); };
-    tl.appendChild(m);
+    const cats = evCats(e);
+    const m = document.createElement('div');
+    m.className = 'evt' + (cats.includes('person') ? ' person' : cats.includes('vehicle') ? ' vehicle' : '');
+    m.style.top = ((e.ts - dayStart)/DAY*100) + '%';
+    m.title = `${cats[0] || 'motion'} ${fmtTime(e.ts)}`;
+    rl.appendChild(m);
   }
-  const c = document.createElement('div'); c.className = 'cursor'; c.id = 'cursor'; tl.appendChild(c);
+  const c = document.createElement('div'); c.className = 'cursor'; c.id = 'cursor'; rl.appendChild(c);
   moveCursor();
 }
 function jumpEvent(dir) {
@@ -411,7 +414,7 @@ function moveCursor() {
   const t = playheadTime(), c = $('#cursor');
   if (!c) return;
   c.style.display = t ? '' : 'none';
-  if (t) { c.style.left = ((t - dayStart)/DAY*100) + '%'; $('#now').textContent = new Date(t*1000).toLocaleString(); }
+  if (t) { c.style.top = ((t - dayStart)/DAY*100) + '%'; $('#now').textContent = new Date(t*1000).toLocaleString(); }
 }
 function playAt(t) {
   if (!segs.length) return;
@@ -441,10 +444,24 @@ $('#rotPlay').onclick = async () => {
 };
 $('#zinPlay').onclick = () => zoomBy($('#player'), 1.4);
 $('#zoutPlay').onclick = () => zoomBy($('#player'), 1 / 1.4);
-$('#timeline').addEventListener('click', e => {
-  const r = e.currentTarget.getBoundingClientRect();
-  playAt(dayStart + (e.clientX - r.left) / r.width * DAY);
-});
+// Vertical rail: click or drag to scrub; preview while dragging, commit on release.
+(function () {
+  const rail = $('#rail');
+  let dragging = false, previewT = null;
+  const railTime = y => {
+    const r = rail.getBoundingClientRect();
+    return dayStart + Math.min(1, Math.max(0, (y - r.top) / r.height)) * DAY;
+  };
+  const preview = t => {
+    const c = $('#cursor'); if (c) { c.style.display = ''; c.style.top = ((t - dayStart) / DAY * 100) + '%'; }
+    $('#now').textContent = new Date(t * 1000).toLocaleString();
+  };
+  rail.addEventListener('pointerdown', e => { dragging = true; rail.setPointerCapture(e.pointerId); previewT = railTime(e.clientY); preview(previewT); });
+  rail.addEventListener('pointermove', e => { if (dragging) { previewT = railTime(e.clientY); preview(previewT); } });
+  const commit = () => { if (dragging && previewT != null) { dragging = false; playAt(previewT); } };
+  rail.addEventListener('pointerup', commit);
+  rail.addEventListener('pointercancel', () => { dragging = false; });
+})();
 $('#cam').onchange = () => { playStart = null; applyPlayerRotation(); loadDay(); };
 $('#day').onchange = e => { const [y,m,d] = e.target.value.split('-').map(Number); setDay(new Date(y, m-1, d)); };
 $('#prev').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getDate()-1); setDay(d); };
@@ -452,11 +469,11 @@ $('#next').onclick = () => { const d = new Date(dayStart*1000); d.setDate(d.getD
 $('#prevEvt').onclick = () => jumpEvent(-1);
 $('#nextEvt').onclick = () => jumpEvent(1);
 $('#export').onclick = () => {
-  const t = playheadTime(); if (!t) return alert('Click the timeline to pick a start point first.');
+  const t = playheadTime(); if (!t) return alert('Pick a start point first — tap the rail or a motion event.');
   location.href = `api/cameras/${$('#cam').value}/export?start=${t}&end=${t + Number($('#exlen').value || 60)}`;
 };
 $('#keep').onclick = async () => {
-  const t = playheadTime(); if (!t) return alert('Click the timeline (or jump to a motion event) to pick a start point first.');
+  const t = playheadTime(); if (!t) return alert('Pick a start point first — tap the rail or a motion event.');
   const name = prompt('Name this saved clip (optional):', '');
   if (name === null) return;
   const len = Number($('#exlen').value || 60);
