@@ -238,6 +238,16 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         sup.reload_notifier()  # apply alert changes live
         return {"settings": result}
 
+    @app.get("/api/cameras/{cam_id}/snapshot")
+    async def camera_snapshot(cam_id: str):
+        cam = camera_or_404(cam_id)
+        from .recorder import snapshot_camera
+        try:
+            img = await snapshot_camera(cam, cfg)
+        except Exception as e:
+            raise HTTPException(502, f"snapshot failed: {e}")
+        return Response(img, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
     @app.get("/live/{cam_id}/{name}")
     async def live(cam_id: str, name: str):
         camera_or_404(cam_id)

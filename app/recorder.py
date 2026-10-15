@@ -83,18 +83,12 @@ async def probe(url: str, transport: str = "tcp", timeout: float = 20) -> dict:
             "audio": a.get("codec_name") if a else None}
 
 
-async def snapshot(url: str, transport: str = "tcp", width: int = 640, timeout: float = 15) -> bytes:
-    """Grab one clean JPEG frame from an RTSP URL (for alert thumbnails).
-
-    Skips the first ~20 decoded frames: HEVC streams often emit warmup/partial
-    frames right after connect (the 'PPS id out of range' artifacts), which
-    produce a near-blank image.
-    """
+async def _ffmpeg_jpeg(args_in: list[str], width: int, timeout: float, skip: int = 0) -> bytes:
+    sel = f"select='gte(n\\,{skip})'," if skip else ""
     proc = await asyncio.create_subprocess_exec(
-        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error",
-        "-rtsp_transport", transport, *socket_timeout_args(), "-i", url,
-        "-vf", f"select='gte(n\\,20)',scale={width}:-2", "-frames:v", "1",
-        "-fps_mode", "passthrough", "-q:v", "4", "-f", "image2", "-",
+        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", *args_in,
+        "-vf", f"{sel}scale={width}:-2", "-frames:v", "1", "-fps_mode", "passthrough",
+        "-q:v", "4", "-f", "image2", "-",
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
     try:
@@ -105,6 +99,44 @@ async def snapshot(url: str, transport: str = "tcp", width: int = 640, timeout: 
     if proc.returncode != 0 or not out:
         raise RuntimeError(redact(err.decode(errors="replace").strip()) or "snapshot failed")
     return out
+
+
+async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: float = 15) -> bytes:
+    """Grab a JPEG from the latest on-disk live HLS segment — clean H.264, no extra
+    camera connection (a fresh RTSP grab contends with the live worker on the
+    wireless sub-stream and returns grey frames). Segments start on a keyframe."""
+    import tempfile
+    d = Path(live_dir) / cam_id
+    init = d / "init.mp4"
+    segs = sorted(d.glob("*.m4s"))
+    if not init.exists() or not segs:
+        raise RuntimeError("no live segments on disk")
+    seg = segs[-2] if len(segs) >= 2 else segs[-1]  # prefer a finalized (not in-progress) segment
+    fd, tmp = tempfile.mkstemp(suffix=".mp4")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(init.read_bytes()); f.write(seg.read_bytes())
+        return await _ffmpeg_jpeg(["-i", tmp], width, timeout)
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+async def snapshot(url: str, transport: str = "tcp", width: int = 640, timeout: float = 15) -> bytes:
+    """Fallback: grab a frame directly from RTSP (skips HEVC warmup frames)."""
+    return await _ffmpeg_jpeg(
+        ["-rtsp_transport", transport, *socket_timeout_args(), "-i", url], width, timeout, skip=20)
+
+
+async def snapshot_camera(cam, cfg, width: int = 640) -> bytes:
+    """Prefer the on-disk live segment (clean, no camera contention); fall back to RTSP."""
+    try:
+        return await snapshot_from_live(cfg.live_dir, cam.id, width)
+    except Exception as e:
+        log.debug("[%s] live snapshot failed (%s), trying RTSP", cam.id, e)
+        return await snapshot(cam.live_url, cfg.rtsp_transport, width)
 
 
 def _video_tag(codec: str | None) -> list[str]:
@@ -276,7 +308,7 @@ class Supervisor:
             return
         try:
             from .alerts import make_notifier
-            img = await snapshot(cam.live_url, self.cfg.rtsp_transport)
+            img = await snapshot_camera(cam, self.cfg)
             when = time.strftime("%H:%M:%S", time.localtime(ts))
             notifier = make_notifier(a)
             await asyncio.to_thread(notifier.send_image, f"Motion — {cam.name}",
