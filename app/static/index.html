@@ -642,9 +642,9 @@ async function renderSettings() {
       <div class="frow"><label>Rotation</label><select class="c_rot">${rotOpts}</select></div>
       <div class="frow"><label>Motion sensitivity</label>
         <input class="c_sens" type="range" min="1" max="20" step="0.5" value="${sensVal}" ${useGlobal ? 'disabled' : ''}>
-        <span class="rangeval c_sens_v">${useGlobal ? 'global' : sensVal}</span>
-        <label class="chk"><input type="checkbox" class="c_global" ${useGlobal ? 'checked' : ''}> use global</label></div>
+        <span class="rangeval c_sens_v">${useGlobal ? 'global' : sensVal}</span></div>
       <div class="rangehint"><span>◀ more sensitive</span><span>less ▶</span></div>
+      <div class="frow"><label></label><label class="chk"><input type="checkbox" class="c_global" ${useGlobal ? 'checked' : ''}> use global sensitivity (${gsens})</label></div>
       <div class="frow"><label></label><button class="btn c_save">Save</button><span class="saved c_msg"></span></div>`;
     const sens = b.querySelector('.c_sens'), sv = b.querySelector('.c_sens_v'), gl = b.querySelector('.c_global');
     sens.oninput = () => { sv.textContent = sens.value; };
