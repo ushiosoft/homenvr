@@ -69,6 +69,16 @@ The NVR reports `Activated: true`, meaning a password was set at setup — the o
 3. **SADP tool** — official Hikvision owner-reset flow (`PasswordResetAbility`
    is true on this unit).
 
+## Enhancements
+
+- **Motion events + smart timeline** — server-side motion detection marks activity
+  on the playback timeline; click a marker or use ◀/▶ motion to jump between events.
+  Tune in `config.yml` under `motion:`.
+- **Health alerts** — get notified (ntfy / webhook / email) if a camera stops
+  recording or the disk fills. Configure under `alerts:`; test via `POST /api/alerts/test`.
+- **Remote access** — watch from anywhere via Tailscale or Cloudflare Tunnel, no
+  cloud and no open ports. See [docs/remote-access.md](docs/remote-access.md).
+
 ## Architecture
 
 | File | Role |

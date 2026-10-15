@@ -27,3 +27,15 @@ retention:
 ui:
   username: admin
   password: ${UI_PASSWORD}
+
+motion:                # server-side motion detection -> timeline markers (no NVR changes)
+  enabled: true
+  sensitivity: 4.0     # frame-difference brightness threshold (0-255); lower = more sensitive
+  min_gap_seconds: 8   # merge a burst of motion into one event
+
+alerts:                # notify when a camera stops recording / disk fills
+  notifier: none       # none | ntfy | webhook | smtp
+  # ntfy_url: https://ntfy.sh/your-private-topic   # for notifier: ntfy
+  # webhook_url: https://hooks.slack.com/...       # for notifier: webhook (Slack/Discord)
+  # smtp: {host: smtp.example.com, port: 587, user: you, password: pw, to: you@example.com}
+  stale_segment_seconds: 180   # alert if recording but no new data this long
