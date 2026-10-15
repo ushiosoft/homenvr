@@ -21,15 +21,22 @@
   .vwrap { position:relative; overflow:hidden; aspect-ratio:16/9; background:#000; }
   .vwrap.tall { aspect-ratio:9/16; }
   .vwrap video { width:100%; height:100%; object-fit:contain; display:block; transform-origin:center center; will-change:transform; }
-  .vwrap.zoomed video { cursor:grab; }
+  .vwrap.zoomed video { cursor:grab; touch-action:none; }
   .vwrap.zoomed video:active { cursor:grabbing; }
+  #playerWrap.zoomed #player { touch-action:none; }
   .ctls { position:absolute; top:6px; right:6px; display:flex; gap:4px; z-index:2; opacity:0; transition:opacity .15s; }
   .vwrap:hover .ctls { opacity:1; }
-  .iconbtn { background:rgba(0,0,0,.55); color:#fff; border:0; border-radius:5px; width:28px; height:28px; font-size:13px; cursor:pointer; line-height:1; }
+  .iconbtn { background:rgba(0,0,0,.55); color:#fff; border:0; border-radius:5px; width:30px; height:30px; font-size:14px; cursor:pointer; line-height:1; }
   .iconbtn:hover { background:rgba(0,0,0,.8); }
   .playtap { position:absolute; inset:0; margin:auto; width:140px; height:40px; background:rgba(0,0,0,.6); color:#fff; border:0; border-radius:8px; cursor:pointer; z-index:3; }
   .zhint { position:absolute; bottom:6px; left:8px; z-index:2; font-size:11px; color:#fff; background:rgba(0,0,0,.5); padding:1px 6px; border-radius:4px; opacity:0; transition:opacity .15s; }
   .vwrap:hover .zhint { opacity:.85; }
+  /* Touch devices have no hover: keep controls visible and drop the mouse hint. */
+  @media (hover: none) {
+    .ctls { opacity:1; }
+    .iconbtn { width:34px; height:34px; font-size:16px; background:rgba(0,0,0,.6); }
+    .zhint { display:none; }
+  }
   .tile .bar { display:flex; gap:8px; padding:6px 10px; align-items:center; font-size:12px; }
   .dot { width:8px; height:8px; border-radius:50%; background:var(--bad); display:inline-block; }
   .dot.ok { background:var(--rec); }
@@ -81,6 +88,8 @@
       <button class="btn" id="prev">◀ day</button><button class="btn" id="next">day ▶</button>
       <button class="btn" id="prevEvt" title="previous motion">◀ motion</button><button class="btn" id="nextEvt" title="next motion">motion ▶</button>
       <span id="now"></span>
+      <button class="btn" id="zinPlay" title="Zoom in">＋</button>
+      <button class="btn" id="zoutPlay" title="Zoom out">－</button>
       <button class="btn" id="rotPlay" title="Rotate view">⟳ rotate</button>
       <span style="flex:1"></span>
       <label>Export <input id="exlen" type="number" value="60" min="1" max="360" style="width:64px"> s from cursor</label>
@@ -140,50 +149,85 @@ async function loadCameras() {
   $('#usage').textContent = `${fmtBytes(st.storage.recordings_bytes)} recorded · ${fmtBytes(st.storage.disk_free_bytes)} free · keep ${r.max_days || '∞'} d / ${r.max_gb || '∞'} GB`;
 }
 
-// ---- rotate / zoom / pan transform engine ----
+// ---- rotate / zoom / pan transform engine (mouse + touch) ----
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 function getRot(id) { try { return +localStorage.getItem('rot.' + id) || 0; } catch { return 0; } }
 function saveRot(id, deg) { try { localStorage.setItem('rot.' + id, deg); } catch {} }
 
+// When rotated 90/270, size the (landscape) video to the wrap's swapped dims so the
+// upright portrait image FILLS the tile instead of being letterboxed twice.
+function fitRotated(video) {
+  const wrap = video.closest('.vwrap, #playerWrap'); if (!wrap) return;
+  const x = video._xf;
+  if (x && x.rot % 180 !== 0) {
+    video.style.width = wrap.clientHeight + 'px';
+    video.style.height = wrap.clientWidth + 'px';
+  } else {
+    video.style.width = ''; video.style.height = '';
+  }
+}
 function applyXform(video) {
   const x = video._xf || (video._xf = { zoom: 1, px: 0, py: 0, rot: 0 });
-  video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${x.zoom}) rotate(${x.rot}deg)`;
   const wrap = video.closest('.vwrap, #playerWrap');
   if (wrap) {
     wrap.classList.toggle('zoomed', x.zoom > 1);
-    wrap.classList.toggle('tall', x.rot % 180 !== 0);  // vertical orientation
+    wrap.classList.toggle('tall', x.rot % 180 !== 0);
   }
+  fitRotated(video);
+  video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${x.zoom}) rotate(${x.rot}deg)`;
+}
+function zoomBy(video, factor) {
+  const x = video._xf, prev = x.zoom;
+  x.zoom = clamp(x.zoom * factor, 1, 6);
+  if (x.zoom === 1) { x.px = 0; x.py = 0; }
+  else { const k = x.zoom / prev; x.px *= k; x.py *= k; }
+  applyXform(video);
 }
 function makeInteractive(video, id) {
   const x = video._xf = { zoom: 1, px: 0, py: 0, rot: id ? getRot(id) : 0 };
   applyXform(video);
-  video.addEventListener('wheel', e => {
-    e.preventDefault();
-    const prev = x.zoom;
-    x.zoom = clamp(x.zoom * (e.deltaY < 0 ? 1.2 : 1 / 1.2), 1, 6);
-    if (x.zoom === 1) { x.px = 0; x.py = 0; }
-    else { const k = x.zoom / prev; x.px *= k; x.py *= k; }
-    applyXform(video);
-  }, { passive: false });
-  let drag = null;
+  const wrap = video.closest('.vwrap, #playerWrap');
+  if (wrap && window.ResizeObserver) new ResizeObserver(() => fitRotated(video)).observe(wrap);
+  // Mouse wheel zoom (desktop)
+  video.addEventListener('wheel', e => { e.preventDefault(); zoomBy(video, e.deltaY < 0 ? 1.2 : 1 / 1.2); }, { passive: false });
+  // Pointer drag to pan (zoomed) + two-finger pinch zoom (touch)
+  const pts = new Map();
+  let drag = null, pinch = null;
   video.addEventListener('pointerdown', e => {
-    if (x.zoom <= 1) return;
-    drag = { sx: e.clientX, sy: e.clientY, px: x.px, py: x.py };
+    pts.set(e.pointerId, e);
     video.setPointerCapture(e.pointerId);
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      pinch = { d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY), zoom: x.zoom };
+      drag = null;
+    } else if (x.zoom > 1) {
+      drag = { sx: e.clientX, sy: e.clientY, px: x.px, py: x.py };
+    }
   });
   video.addEventListener('pointermove', e => {
-    if (!drag) return;
-    x.px = drag.px + (e.clientX - drag.sx); x.py = drag.py + (e.clientY - drag.sy);
-    applyXform(video);
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, e);
+    if (pinch && pts.size === 2) {
+      e.preventDefault();
+      const [a, b] = [...pts.values()];
+      const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      x.zoom = clamp(pinch.zoom * (d / pinch.d), 1, 6);
+      if (x.zoom === 1) { x.px = 0; x.py = 0; }
+      applyXform(video);
+    } else if (drag) {
+      e.preventDefault();
+      x.px = drag.px + (e.clientX - drag.sx); x.py = drag.py + (e.clientY - drag.sy);
+      applyXform(video);
+    }
   });
-  const end = () => { drag = null; };
-  video.addEventListener('pointerup', end);
-  video.addEventListener('pointercancel', end);
+  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (pts.size === 0) drag = null; };
+  video.addEventListener('pointerup', up);
+  video.addEventListener('pointercancel', up);
   return x;
 }
 function rotate(video, id) {
   const x = video._xf; x.rot = (x.rot + 90) % 360;
-  x.zoom = 1; x.px = 0; x.py = 0;              // reset zoom on rotate to avoid confusion
+  x.zoom = 1; x.px = 0; x.py = 0;              // reset zoom on rotate
   if (id) saveRot(id, x.rot);
   applyXform(video);
 }
@@ -194,13 +238,18 @@ function renderLive() {
   for (const c of cameras) {
     const t = document.createElement('div'); t.className = 'tile';
     t.innerHTML = `<div class="vwrap"><video muted autoplay playsinline></video>
-      <div class="ctls"><button class="iconbtn rot" title="Rotate">⟳</button>
-      <button class="iconbtn fs" title="Fullscreen">⛶</button></div>
+      <div class="ctls">
+        <button class="iconbtn zin" title="Zoom in">+</button>
+        <button class="iconbtn zout" title="Zoom out">−</button>
+        <button class="iconbtn rot" title="Rotate">⟳</button>
+        <button class="iconbtn fs" title="Fullscreen">⛶</button></div>
       <span class="zhint">scroll to zoom · drag to pan</span></div>
       <div class="bar"><span class="dot"></span><b></b><span class="err"></span></div>`;
     t.querySelector('b').textContent = c.name;
     const v = t.querySelector('video');
     makeInteractive(v, c.id);
+    t.querySelector('.zin').onclick = () => zoomBy(v, 1.4);
+    t.querySelector('.zout').onclick = () => zoomBy(v, 1 / 1.4);
     t.querySelector('.rot').onclick = () => rotate(v, c.id);
     t.querySelector('.fs').onclick = () => (t.querySelector('.vwrap').requestFullscreen?.());
     v.ondblclick = () => t.querySelector('.vwrap').requestFullscreen?.();
@@ -287,6 +336,8 @@ function applyPlayerRotation() {
   const v = $('#player'); v._xf.rot = getRot($('#cam').value); v._xf.zoom = 1; v._xf.px = 0; v._xf.py = 0; applyXform(v);
 }
 $('#rotPlay').onclick = () => rotate($('#player'), $('#cam').value);
+$('#zinPlay').onclick = () => zoomBy($('#player'), 1.4);
+$('#zoutPlay').onclick = () => zoomBy($('#player'), 1 / 1.4);
 $('#timeline').addEventListener('click', e => {
   const r = e.currentTarget.getBoundingClientRect();
   playAt(dayStart + (e.clientX - r.left) / r.width * DAY);
