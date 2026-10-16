@@ -746,7 +746,11 @@ function setOverlay(id, html) {
 }
 function setBadge(id) {
   const t = tiles[id], b = t.el.querySelector('.badge');
-  if (S.mode === 'live') { b.textContent = 'LIVE · SD'; b.className = 'badge live'; return; }
+  if (S.mode === 'live') {
+    b.textContent = t.liveVia === 'rtc' ? 'LIVE · RTC' : 'LIVE · SD'; b.className = 'badge live';
+    b.title = t.liveVia === 'rtc' ? 'WebRTC, about a second behind real time' : 'HLS, a few seconds behind real time';
+    return;
+  }
   const tt = tileTime(id);
   b.className = 'badge';
   b.textContent = t.state === 'none' ? 'no recording' : `${tt ? fmtTime(tt) : '—'} · ${t.direct ? '2K' : (t.height || 480) + 'p'}`;
@@ -760,15 +764,74 @@ function goLive() {
   for (const c of cameras) {
     const t = tiles[c.id];
     t.state = 'live'; t.direct = false;
+    stopLive(t);
     t.video.removeAttribute('src'); t.video.load();
-    if (t.hls) t.hls.destroy();
     t.video._xf.rot = camRot[c.id] || 0; t.video._xf.zoom = 1; t.video._xf.px = 0; t.video._xf.py = 0;
     applyXform(t.video);
     t.video.playbackRate = 1;
     setOverlay(c.id, isWall ? '' : '<span class="spin"></span>Switching to live…');
-    t.hls = attachHls(t.video, c.live);
+    startLive(c);
   }
   renderAll();
+}
+
+// ---- live transport: WebRTC via the go2rtc sidecar (~1 s behind live), HLS fallback
+// (~6 s). WebRTC is tried first when the server has it; if it doesn't connect within a
+// few seconds, or drops twice, that camera uses HLS until the page is reloaded.
+const RTC_CONNECT_MS = 6000;
+function stopLive(t) {
+  if (t.hls) { t.hls.destroy(); t.hls = null; }
+  if (t.pc) { t.pc.onconnectionstatechange = null; t.pc.close(); t.pc = null; }
+  clearTimeout(t.rtcTimer);
+  if (t.video.srcObject) t.video.srcObject = null;
+  t.liveVia = null;
+}
+function startLive(c) {
+  const t = tiles[c.id];
+  if (c.webrtc && window.RTCPeerConnection && (t.rtcFails || 0) < 2) {
+    attachRtc(c).catch(e => { console.warn('[' + c.id + '] webrtc:', e.message); liveFallback(c); });
+  } else {
+    t.hls = attachHls(t.video, c.live); t.liveVia = 'hls'; setBadge(c.id);
+  }
+}
+function liveFallback(c) {
+  const t = tiles[c.id];
+  if (S.mode !== 'live' || t.liveVia === 'hls') return;
+  t.rtcFails = (t.rtcFails || 0) + 1;
+  stopLive(t);
+  t.hls = attachHls(t.video, c.live); t.liveVia = 'hls'; setBadge(c.id);
+}
+async function attachRtc(c) {
+  const t = tiles[c.id], v = t.video;
+  const pc = t.pc = new RTCPeerConnection();
+  t.liveVia = 'rtc';
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+  const ms = new MediaStream();
+  pc.ontrack = e => { ms.addTrack(e.track); if (v.srcObject !== ms) { v.srcObject = ms; tryPlay(v); } };
+  pc.onconnectionstatechange = () => {
+    if (t.pc !== pc) return;
+    const st = pc.connectionState;
+    if (st === 'connected') { clearTimeout(t.rtcTimer); t.rtcFails = 0; }
+    else if (st === 'failed') liveFallback(c);
+    else if (st === 'disconnected') {   // often recovers by itself; give it a moment
+      clearTimeout(t.rtcTimer);
+      t.rtcTimer = setTimeout(() => { if (t.pc === pc && pc.connectionState !== 'connected') { t.rtcFails = (t.rtcFails || 0) + 1; stopLive(t); startLive(c); } }, 4000);
+    }
+  };
+  await pc.setLocalDescription(await pc.createOffer());
+  // No trickle: wait (briefly) for our own candidates, then send one complete offer.
+  await new Promise(res => {
+    if (pc.iceGatheringState === 'complete') return res();
+    const done = () => { if (pc.iceGatheringState === 'complete') res(); };
+    pc.addEventListener('icegatheringstatechange', done); setTimeout(res, 1500);
+  });
+  const r = await fetch(`api/cameras/${c.id}/webrtc`, { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
+  if (!r.ok) throw new Error('signalling ' + r.status);
+  if (t.pc !== pc) return;          // torn down meanwhile
+  await pc.setRemoteDescription({ type: 'answer', sdp: await r.text() });
+  t.rtcTimer = setTimeout(() => { if (t.pc === pc && pc.connectionState !== 'connected') liveFallback(c); }, RTC_CONNECT_MS);
+  setBadge(c.id);
 }
 // Enter review (or move within it) at time T: every camera plays its recording from T.
 function reviewAt(T, opts = {}) {
@@ -781,7 +844,7 @@ function reviewAt(T, opts = {}) {
   ensureHalfWindow(true);
   for (const c of cameras) {
     const t = tiles[c.id];
-    if (wasLive && t.hls) { t.hls.destroy(); t.hls = null; }
+    if (wasLive) stopLive(t);
     loadTile(c.id, T);
   }
   renderAll();
@@ -828,6 +891,7 @@ function hevcSupported() {
 async function loadTile(id, T) {
   const t = tiles[id], v = t.video, gen = (t.gen = (t.gen || 0) + 1);
   t.reloads.push(Date.now()); t.reloads = t.reloads.filter(x => Date.now() - x < 10000);
+  if (t.pc || v.srcObject) stopLive(t);  // srcObject would override src
   const cov = covered(id, T);
   if (!cov.ok) {
     t.state = 'none'; v.removeAttribute('src'); v.load();
@@ -1734,7 +1798,7 @@ function tab(name) {
     layoutGrid(); goLive();
   } else {
     // Stop streaming while away from the cameras page.
-    for (const c of cameras) { const t = tiles[c.id]; if (t.hls) { t.hls.destroy(); t.hls = null; } t.video.removeAttribute('src'); t.video.load(); t.state = 'idle'; }
+    for (const c of cameras) { const t = tiles[c.id]; stopLive(t); t.video.removeAttribute('src'); t.video.load(); t.state = 'idle'; }
   }
   if (name === 'saved') renderSaved();
   if (name === 'settings') renderSettings();

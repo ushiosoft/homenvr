@@ -45,3 +45,22 @@ def test_saved_thumb_and_delete(tmp_path):
         assert c.get("/api/saved/..%2Fx.mp4/thumb").status_code == 404
         assert c.delete("/api/saved/cam1-20261015-120000.mp4").status_code == 200
         assert not (d / "cam1-20261015-120000.jpg").exists()
+
+
+def test_webrtc_signalling(tmp_path, monkeypatch):
+    with client(tmp_path) as c:   # webrtc_api not configured -> HLS only
+        assert c.get("/api/cameras").json()[0]["webrtc"] is False
+        assert c.post("/api/cameras/cam1/webrtc", content="v=0\r\n").status_code == 404
+    from app import webrtc
+    monkeypatch.setattr(webrtc.Go2rtc, "answer", lambda self, cam, offer: "v=0\r\no=answer-for-" + cam.id)
+    cfg = parse({"storage_dir": str(tmp_path / "rec"), "live_dir": str(tmp_path / "live"),
+                 "webrtc_api": "http://go2rtc:1984/",
+                 "cameras": [{"id": "cam1", "record_url": "rtsp://x/1", "live_url": "rtsp://x/2", "live_codec": "h264"}]})
+    assert cfg.webrtc_api == "http://go2rtc:1984"
+    with TestClient(create_app(cfg, run_recorders=False)) as c:
+        assert c.get("/api/cameras").json()[0]["webrtc"] is True
+        r = c.post("/api/cameras/cam1/webrtc", content="v=0\r\no=offer", headers={"Content-Type": "application/sdp"})
+        assert r.status_code == 200 and r.text.endswith("answer-for-cam1") and r.headers["content-type"].startswith("application/sdp")
+        assert c.post("/api/cameras/cam1/webrtc", content="hello").status_code == 400
+        assert c.post("/api/cameras/nope/webrtc", content="v=0").status_code == 404
+    assert webrtc.stream_source(cfg.cameras[0]) == "ffmpeg:rtsp://x/2#video=h264#audio=opus"

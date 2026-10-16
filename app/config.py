@@ -116,6 +116,8 @@ class Config:
     alerts: Alerts = field(default_factory=Alerts)
     motion: Motion = field(default_factory=Motion)
     events_db: Path = Path("/recordings/events.db")
+    # go2rtc sidecar API for low-latency WebRTC live view ("" = off: HLS only).
+    webrtc_api: str = ""
 
     def camera(self, cam_id: str) -> Camera | None:
         return next((c for c in self.cameras if c.id == cam_id), None)
@@ -211,6 +213,7 @@ def parse(raw: dict) -> Config:
             detect_confidence=float(m.get("detect_confidence", 0.45)),
         ),
         events_db=Path(raw.get("events_db", str(storage_dir / "events.db"))),
+        webrtc_api=str(raw.get("webrtc_api", "") or "").rstrip("/"),
     )
 
 

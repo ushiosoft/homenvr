@@ -1,5 +1,8 @@
 {
-  "TCP": { "443": { "HTTPS": true } },
+  "TCP": {
+    "443": { "HTTPS": true },
+    "8555": { "TCPForward": "go2rtc:8555" }
+  },
   "Web": {
     "${TS_CERT_DOMAIN}:443": {
       "Handlers": { "/": { "Proxy": "http://homenvr-app:8080" } }

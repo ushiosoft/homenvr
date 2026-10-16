@@ -38,11 +38,19 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     settings_mod.apply(cfg, settings_mod.load_overlay(settings_mod.settings_path(cfg)))
     sup = Supervisor(cfg, storage)
 
+    from .webrtc import Go2rtc
+    go2rtc = Go2rtc(cfg)
+
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        warm = None
         if run_recorders:
             await sup.start()
+            if go2rtc.enabled:
+                warm = asyncio.create_task(go2rtc.keep_warm())
         yield
+        if warm:
+            warm.cancel()
         await sup.stop()
 
     app = FastAPI(title="homenvr", lifespan=lifespan)
@@ -90,8 +98,26 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
                 "last": last,
                 "rotation": c.rotation,
                 "live": f"live/{c.id}/index.m3u8",
+                "webrtc": bool(cfg.webrtc_api),
             })
         return out
+
+    @app.post("/api/cameras/{cam_id}/webrtc")
+    async def webrtc(cam_id: str, request: Request):
+        """WebRTC signalling for the low-latency live view: the browser's SDP offer in,
+        go2rtc's SDP answer out (go2rtc's own API stays internal)."""
+        cam = camera_or_404(cam_id)
+        if not go2rtc.enabled:
+            raise HTTPException(404, "webrtc live view is not configured")
+        offer = (await request.body()).decode(errors="replace")
+        if not offer.startswith("v=0"):
+            raise HTTPException(400, "expected an SDP offer")
+        try:
+            sdp = await asyncio.to_thread(go2rtc.answer, cam, offer)
+        except Exception as e:
+            log.warning("[%s] webrtc signalling failed: %s", cam_id, e)
+            raise HTTPException(502, "webrtc unavailable")
+        return Response(sdp, media_type="application/sdp", headers={"Cache-Control": "no-store"})
 
     @app.get("/api/cameras/{cam_id}/segments")
     async def segments(cam_id: str, start: float = Query(...), end: float = Query(...)):

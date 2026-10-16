@@ -14,3 +14,18 @@ services:
       - ${RECORDINGS_DIR:-./recordings}:/recordings
     tmpfs:
       - /tmp/homenvr-live:size=256m   # live-view HLS segments; RAM only
+
+  # Low-latency WebRTC live view (~1 s instead of ~6 s HLS). homenvr registers the
+  # camera streams and proxies signalling; only the media port is published.
+  go2rtc:
+    image: alexxit/go2rtc:1.9.14
+    container_name: homenvr-go2rtc
+    restart: unless-stopped
+    environment:
+      WEBRTC_LAN_IP: ${WEBRTC_LAN_IP:-}
+      WEBRTC_TS_IP: ${WEBRTC_TS_IP:-}
+    ports:
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml:ro

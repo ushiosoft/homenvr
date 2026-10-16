@@ -59,6 +59,12 @@ keeps working unchanged. Verified: the sidecar boots in userspace mode and
 registers with the Tailscale control plane; the only input it needs is your
 `TS_AUTHKEY`.
 
+Low-latency live view (WebRTC, the go2rtc sidecar in `docker-compose.yml`) also
+works remotely: `ts-serve.json` forwards TCP 8555 to go2rtc, and go2rtc advertises
+the sidecar's tailnet IP. Set `WEBRTC_TS_IP` in `.env` to that IP (`docker exec
+homenvr-tailscale tailscale ip -4`). If WebRTC can't connect, the page falls back
+to HLS by itself.
+
 To enable HTTPS certs on your tailnet once: in the admin console enable MagicDNS
 and HTTPS (Settings → DNS). Without that, change `ts-serve.json` to serve plain
 HTTP on port 80 instead of 443/HTTPS.

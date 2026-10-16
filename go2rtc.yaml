@@ -1,0 +1,20 @@
+# go2rtc sidecar: low-latency WebRTC live view for homenvr (see app/webrtc.py).
+# Streams are NOT listed here: homenvr registers them at runtime from its own camera
+# config, so this file holds no credentials and is mounted read-only.
+api:
+  listen: ":1984"        # internal only (not published); homenvr proxies signalling
+rtsp:
+  listen: ":8554"        # internal only (not published): go2rtc's ffmpeg transcoder
+                         # hands video back through it
+webrtc:
+  listen: ":8555"        # published on the host (tcp + udp) for the media
+  # Addresses the browser can reach go2rtc at (it otherwise only knows its container
+  # IP). Set in .env: the host's LAN IP, and the Tailscale sidecar's tailnet IP.
+  candidates:
+    - ${WEBRTC_LAN_IP:127.0.0.1}:8555
+    - ${WEBRTC_TS_IP:127.0.0.1}:8555
+  # No public STUN servers: LAN and Tailscale need none, and by default go2rtc would
+  # contact Google's to learn (and advertise) this home's public IP.
+  ice_servers: []
+log:
+  level: info

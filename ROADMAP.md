@@ -2,8 +2,9 @@
 
 Planned enhancements beyond the core record/playback system.
 
-**Status (Oct 2026):** 1 (motion events, via Option B + object labels), 2 (health
-alerts) and 3 (Tailscale sidecar) are built. 4 is the open backlog item.
+**Status (Oct 2026):** all four are built — 1 (motion events, via Option B + object
+labels), 2 (health alerts), 3 (Tailscale sidecar), 4 (WebRTC live view via a go2rtc
+sidecar; see `app/webrtc.py`).
 
 Context: the core system already replaces the Hik app's playback — recordings
 are local MP4s served with HTTP range requests, so "failed to grab recording"
@@ -119,7 +120,16 @@ lets you reach the NVR itself remotely for maintenance.
 
 ---
 
-## 4. Sub-second live view (WebRTC streaming service)  — backlog
+## 4. Sub-second live view (WebRTC streaming service)  — built
+
+Built as designed below with go2rtc 1.9.14: streams registered + preloaded by homenvr
+at runtime (no credentials in `go2rtc.yaml`), signalling proxied at
+`/api/cameras/{id}/webrtc`, media on port 8555 (LAN; TCP-forwarded by the Tailscale
+sidecar), public STUN disabled, HLS kept as the automatic fallback. Measured: camera
+clock vs. display 6 s (HLS) → 2 s (includes the camera clock's offset); first
+picture 1–2.6 s; the three always-on transcodes cost ~22% of one core. Still open:
+the live HLS worker and motion detector still read the NVR directly (they could read
+go2rtc's internal RTSP instead, saving one sub-stream connection per camera).
 
 Goal: a "doorbell-style" live picture with < 1 s delay, instead of HLS.
 

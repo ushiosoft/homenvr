@@ -44,3 +44,7 @@ alerts:                # notify when a camera stops recording / disk fills
   stale_segment_seconds: 180   # alert if recording but no new data this long
   motion_push: false           # push a camera snapshot when motion is detected
   motion_push_cooldown: 0      # seconds between motion pushes per camera (0 = every event)
+
+# Low-latency WebRTC live view via the go2rtc sidecar (docker-compose.yml).
+# Remove or leave empty to use HLS only.
+webrtc_api: http://go2rtc:1984
