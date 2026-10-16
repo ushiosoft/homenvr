@@ -16,8 +16,20 @@ import yaml
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
 
 
-def _interpolate(text: str) -> str:
-    return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(2) or ""), text)
+def _interpolate(value):
+    """Expand ${VAR} / ${VAR:-default} inside the *parsed* config's strings.
+
+    Done after YAML parsing, not on the raw text, so a secret containing YAML
+    syntax (a password like "!123456#" — '!' is a tag, '#' a comment) is taken
+    literally instead of breaking the file or being silently truncated.
+    """
+    if isinstance(value, str):
+        return _ENV_RE.sub(lambda m: os.environ.get(m.group(1), m.group(2) or ""), value)
+    if isinstance(value, list):
+        return [_interpolate(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _interpolate(v) for k, v in value.items()}
+    return value
 
 
 @dataclass
@@ -198,4 +210,4 @@ def parse(raw: dict) -> Config:
 
 def load(path: str | os.PathLike | None = None) -> Config:
     path = Path(path or os.environ.get("HOMENVR_CONFIG", "/config/config.yml"))
-    return parse(yaml.safe_load(_interpolate(path.read_text())) or {})
+    return parse(_interpolate(yaml.safe_load(path.read_text()) or {}))
