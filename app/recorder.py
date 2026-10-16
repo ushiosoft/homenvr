@@ -108,27 +108,108 @@ async def _ffmpeg_jpeg(args_in: list[str], width: int, timeout: float, skip: int
     return out
 
 
-async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: float = 15, rot: int = 0) -> bytes:
-    """Grab a JPEG from the latest on-disk live HLS segment — clean H.264, no extra
-    camera connection (a fresh RTSP grab contends with the live worker on the
-    wireless sub-stream and returns grey frames). Segments start on a keyframe."""
-    import tempfile
+def _live_segments(live_dir, cam_id: str) -> tuple[Path, list[Path]]:
+    """(init.mp4, finished live segments oldest->newest). Only segments listed in the
+    playlist are finished; the one being written isn't listed yet."""
     d = Path(live_dir) / cam_id
     init = d / "init.mp4"
-    segs = sorted(d.glob("*.m4s"))
+    try:
+        names = [ln.strip() for ln in (d / "index.m3u8").read_text().splitlines()
+                 if ln.strip().endswith(".m4s")]
+    except OSError:
+        names = []
+    segs = [d / n for n in names if (d / n).is_file()]
     if not init.exists() or not segs:
         raise RuntimeError("no live segments on disk")
-    seg = segs[-2] if len(segs) >= 2 else segs[-1]  # prefer a finalized (not in-progress) segment
+    return init, segs
+
+
+def _concat_tmp(init: Path, segs: list[Path]) -> str:
+    import tempfile
     fd, tmp = tempfile.mkstemp(suffix=".mp4")
+    with os.fdopen(fd, "wb") as f:
+        f.write(init.read_bytes())
+        for seg in segs:
+            f.write(seg.read_bytes())
+    return tmp
+
+
+async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: float = 15, rot: int = 0) -> bytes:
+    """Grab the newest frame from the live HLS segments on disk — clean H.264, no extra
+    camera connection (a fresh RTSP grab contends with the live worker on the
+    wireless sub-stream and returns grey frames)."""
+    init, segs = _live_segments(live_dir, cam_id)
+    tmp = _concat_tmp(init, segs[-1:])
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(init.read_bytes()); f.write(seg.read_bytes())
-        return await _ffmpeg_jpeg(["-i", tmp], width, timeout, rot=rot)
+        # The END of the newest finished segment: its first frame is ~2 s older.
+        return await _ffmpeg_jpeg(["-sseof", "-0.4", "-i", tmp], width, timeout, rot=rot)
     finally:
         try:
             os.unlink(tmp)
         except OSError:
             pass
+
+
+async def live_frames(live_dir, cam_id: str, since: float, max_segments: int = 3, fps: float = 2,
+                      width: int = 640, timeout: float = 20, rot: int = 0) -> list[bytes]:
+    """JPEG frames (fps per second) from the live segments finished at or after the
+    wall-clock time `since` (at most max_segments of them, ~2 s each), oldest first."""
+    init, segs = _live_segments(live_dir, cam_id)
+    recent = [p for p in segs if p.stat().st_mtime >= since][:max_segments] or segs[-1:]
+    tmp = _concat_tmp(init, recent)
+    rv = rotation_vf(rot)
+    vf = f"fps={fps},{rv + ',' if rv else ''}scale={width}:-2"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", tmp, "-vf", vf,
+            "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "-",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout)
+        except asyncio.TimeoutError:
+            proc.kill(); await proc.wait()
+            raise RuntimeError("frame burst timed out")
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    frames = split_jpegs(out)
+    if not frames:
+        raise RuntimeError(redact(err.decode(errors="replace").strip()) or "no frames")
+    return frames
+
+
+def split_jpegs(data: bytes) -> list[bytes]:
+    """Split concatenated JPEGs (ffmpeg image2pipe/mjpeg). Inside JPEG entropy data
+    0xFF is always byte-stuffed, so FFD9 only occurs as the end-of-image marker."""
+    out, i = [], 0
+    while True:
+        a = data.find(b"\xff\xd8", i)
+        if a < 0:
+            break
+        b = data.find(b"\xff\xd9", a + 2)
+        if b < 0:
+            break
+        out.append(data[a:b + 2])
+        i = b + 2
+    return out
+
+
+def pick_frame(frames: list[bytes], scores: list[dict[str, float]]) -> tuple[int, list[str]]:
+    """Choose the frame to push/keep for an event: the most confident person, else the
+    most confident vehicle, else the frame nearest the trigger (~60% of the way in:
+    the burst spans ~6 s before to ~4 s after it). Returns (index, labels seen)."""
+    labels = [c for c in ("person", "vehicle") if any(sc.get(c, 0) > 0 for sc in scores)]
+    for cat in ("person", "vehicle"):
+        best = max(range(len(frames)), key=lambda i: scores[i].get(cat, 0) if i < len(scores) else 0)
+        if best < len(scores) and scores[best].get(cat, 0) > 0:
+            return best, labels
+    return trigger_index(len(frames)), labels
+
+
+def trigger_index(n: int) -> int:
+    return min(n - 1, int(n * 0.6))
 
 
 async def snapshot(url: str, transport: str = "tcp", width: int = 640, timeout: float = 15, rot: int = 0) -> bytes:
@@ -228,6 +309,7 @@ def record_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]
 
 
 HLS_SEG_SECONDS = 2  # segment length; also the forced-keyframe interval
+CAPTURE_AFTER = 4.5  # seconds after a motion trigger to wait before picking its frame
 
 
 def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]:
@@ -381,14 +463,12 @@ class Supervisor:
             return
         self._motion_pushing.add(cam_id)
         try:
-            img = await snapshot_camera(cam, self.cfg)
+            img, labels = await self._capture_event(cam, ts, want_detect)
             if want_thumb:
                 # Persist the frame as the event's thumbnail: the incident list and
                 # filmstrips then load instantly instead of running ffmpeg per image.
                 await asyncio.to_thread(save_thumb, self.storage.thumb_path(cam_id, eid), img)
-            labels: list[str] = []
             if want_detect:
-                labels = await asyncio.to_thread(self.detector.detect, img)
                 if self.events is not None:
                     await asyncio.to_thread(self.events.set_label, eid, ",".join(labels))
             if push_now:
@@ -403,6 +483,31 @@ class Supervisor:
             log.warning("[%s] motion handling failed: %s", cam_id, redact(str(e)))
         finally:
             self._motion_pushing.discard(cam_id)
+
+    async def _capture_event(self, cam, ts: float, detect: bool) -> tuple[bytes, list[str]]:
+        """The frame that best shows what triggered motion at `ts`, plus labels.
+
+        Measured on real pushes, the old single frame (start of the previous live
+        segment) showed the person in 4 of 18 cases: the trigger lags the action
+        (people were often visible ~2 s *before* it and gone right after), and that
+        frame was itself ~4 s old. Instead wait a few seconds past the trigger,
+        decode a ~10 s burst at 2 fps (≈6 s before to 4 s after) from the live
+        segments, and keep the frame with the most confident person (else vehicle).
+        Pushes arrive ~5 s later than before, but show the subject.
+        """
+        await asyncio.sleep(max(0.0, ts + CAPTURE_AFTER - time.time()))
+        rot = getattr(cam, "rotation", 0)
+        try:
+            frames = await live_frames(self.cfg.live_dir, cam.id, since=ts - 4.5, max_segments=5, rot=rot)
+        except Exception as e:
+            log.debug("[%s] frame burst failed (%s); single snapshot", cam.id, e)
+            img = await snapshot_camera(cam, self.cfg)
+            return img, (await asyncio.to_thread(self.detector.detect, img) if detect else [])
+        if not detect:
+            return frames[trigger_index(len(frames))], []
+        scores = await asyncio.to_thread(lambda: [self.detector.scores(f) for f in frames])
+        i, labels = pick_frame(frames, scores)
+        return frames[i], labels
 
     async def start(self) -> None:
         if not shutil.which(FFMPEG):

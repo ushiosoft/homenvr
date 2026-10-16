@@ -46,16 +46,21 @@ class ObjectDetector:
 
     def detect(self, jpeg: bytes) -> list[str]:
         """Return the categories present ('person' and/or 'vehicle'), highest-conf first."""
+        best = self.scores(jpeg)
+        return [c for c in sorted(best, key=best.get, reverse=True) if best[c] > 0]
+
+    def scores(self, jpeg: bytes) -> dict[str, float]:
+        """Best confidence per category ({'person': 0.82, 'vehicle': 0.0}); 0 = not seen."""
+        best = {"person": 0.0, "vehicle": 0.0}
         if not self.ok:
-            return []
+            return best
         cv2, np = self._cv2, self._np
         img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
         if img is None:
-            return []
+            return best
         blob = cv2.dnn.blobFromImage(cv2.resize(img, (300, 300)), 0.007843, (300, 300), 127.5)
         self._net.setInput(blob)
         det = self._net.forward()
-        best = {"person": 0.0, "vehicle": 0.0}
         for i in range(det.shape[2]):
             conf = float(det[0, 0, i, 2])
             if conf < self.confidence:
@@ -64,4 +69,4 @@ class ObjectDetector:
             cat = "person" if cls in PERSON else "vehicle" if cls in VEHICLE else None
             if cat:
                 best[cat] = max(best[cat], conf)
-        return [c for c in ("person", "vehicle") if best[c] > 0]
+        return best
