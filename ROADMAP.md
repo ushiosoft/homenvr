@@ -1,7 +1,9 @@
 # homenvr roadmap
 
-Planned enhancements beyond the core record/playback system. Deployment is
-deferred; this is the design to build against.
+Planned enhancements beyond the core record/playback system.
+
+**Status (Oct 2026):** 1 (motion events, via Option B + object labels), 2 (health
+alerts) and 3 (Tailscale sidecar) are built. 4 is the open backlog item.
 
 Context: the core system already replaces the Hik app's playback — recordings
 are local MP4s served with HTTP range requests, so "failed to grab recording"
@@ -114,6 +116,40 @@ Not recommended unless the other two don't fit.
 
 **Recommendation:** Tailscale. ~15 min to set up, nothing exposed, and it also
 lets you reach the NVR itself remotely for maintenance.
+
+---
+
+## 4. Sub-second live view (WebRTC streaming service)  — backlog
+
+Goal: a "doorbell-style" live picture with < 1 s delay, instead of HLS.
+
+Where the delay is today (Oct 2026, after moving to 1 s HLS segments): the
+browser player sits 2 segments (≈ 2 s) behind the newest video, segments are
+1 s long, plus camera/NVR RTSP, the H.264 transcode and browser buffering.
+Measured: hls.js latency 4.1 s → 2.1 s; camera clock vs. display 8–9 s → 6 s
+(that figure includes the camera clock's offset). HLS can't go much lower
+without stalling on the cameras' Wi-Fi.
+
+Design: add a small streaming server as a compose sidecar —
+**go2rtc** (recommended: one binary, RTSP in → WebRTC/MSE out, can transcode
+HEVC → H.264 with ffmpeg, handles G.711 audio) or **MediaMTX**.
+
+- It pulls each camera's sub-stream from the NVR once; homenvr's live worker can
+  then read from go2rtc instead of the NVR, so the cameras' Wi-Fi isn't carrying
+  an extra copy. (The recorder keeps its own main-stream connection.)
+- The Cameras page plays WebRTC in the tiles (go2rtc ships a small JS player /
+  `video-rtc` element), with the current hls.js path as the fallback.
+- Remote: WebRTC over Tailscale works peer-to-peer on the tailnet (UDP); expose
+  go2rtc's WebRTC port only on the tailnet, or use its TCP fallback through the
+  same HTTPS proxy.
+- Auth: keep go2rtc unexposed and proxy its signalling through homenvr
+  (`/live/rtc/...`) so the existing login still applies.
+- Keep: snapshots / push frames read from homenvr's own live segments, so the
+  motion → push path doesn't depend on the new service.
+
+Open questions: whether the NVR allows a second sub-stream reader alongside the
+motion detector (or move motion detection to read from go2rtc too); CPU of
+go2rtc's own transcode vs. today's live ffmpeg.
 
 ---
 
