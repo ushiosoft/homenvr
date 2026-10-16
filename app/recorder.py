@@ -298,8 +298,12 @@ def record_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]
         *input_args(cam.record_url, cfg.rtsp_transport),
         "-map", "0:v:0", "-c:v", "copy", *_video_tag(info["video"]),
         *_audio_args(cam.audio, info.get("audio")),
+        # Split by stream time, NOT -segment_atclocktime: that mode re-reads the wall
+        # clock per packet and cuts whenever it appears to go backwards. On WSL2 /
+        # Docker Desktop the clock is stepped back ~60 ms every ~30 s by time sync,
+        # which produced irregular ~30 s files instead of segment_seconds.
         "-f", "segment", "-segment_time", str(cfg.segment_seconds),
-        "-segment_atclocktime", "1", "-reset_timestamps", "1", "-strftime", "1",
+        "-reset_timestamps", "1", "-strftime", "1",
         "-segment_format", "mp4",
         # Fragmented MP4: the in-progress segment is playable and a crash loses
         # at most one fragment instead of the whole file.
