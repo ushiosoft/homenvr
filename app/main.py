@@ -230,7 +230,10 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         rv = rotation_vf(cam.rotation)
         vf = (rv + "," if rv else "") + f"scale=-2:{height - height % 2}"
         return await _stream_ffmpeg(script, [
+            # Keyframe every ~2 s: fragments (one per keyframe) are small, so the
+            # browser can start playing ~2 s of encoded video in, not ~10 s.
             "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+            "-g", "50", "-keyint_min", "50",
             "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k"])
 
     @app.get("/api/cameras/{cam_id}/keyframe")

@@ -395,7 +395,7 @@
           <span class="time" id="tptime"></span>
           <span class="syncchip" id="syncchip"></span>
           <span class="right">
-            <label class="chk"><input type="checkbox" id="skipgaps" checked>Skip quiet gaps</label>
+            <label class="chk" title="After an incident ends, jump over long stretches with no motion to the next one"><input type="checkbox" id="skipgaps">Skip quiet gaps</label>
             <label class="sel-lbl">Speed <select id="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
             <label class="sel-lbl">Quality <select id="quality"><option value="auto">Auto</option><option value="direct">2K direct</option><option value="compat">Compatible</option></select></label>
             <button class="btn soundbtn"></button>
@@ -476,6 +476,8 @@ const DAY = 86400;
 const LIVE_EDGE = 8;        // the newest few seconds aren't in the recordings yet: treat as live
 const PLAY_WINDOW = 300;    // seconds per playback request; tiles continue into the next window
 const LEAD = 5;             // start incident playback this many seconds early
+const SKIP_TAIL = 20;       // skip-gaps: keep playing this long after an incident's last event
+const SKIP_MIN_GAP = 30;    // ... and only skip silences longer than this
 let toastTimer = null;
 function toast(msg, ms = 3500) {
   let t = $('#toast'); if (!t) { t = document.createElement('div'); t.id = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
@@ -764,6 +766,7 @@ function goLive() {
 }
 // Enter review (or move within it) at time T: every camera plays its recording from T.
 function reviewAt(T, opts = {}) {
+  lastInside = null;  // a jump starts fresh: skip-gaps only reacts to playing past an incident
   if (T > nowS() - LIVE_EDGE) { goLive(); return; }
   const wasLive = S.mode === 'live';
   S.mode = 'review'; S.playT = T; S.paused = false;
@@ -779,6 +782,7 @@ function reviewAt(T, opts = {}) {
 }
 // Seek every camera; reuse what's already buffered (instant ±10 s), reload the rest.
 function seekAll(T) {
+  lastInside = null;  // a jump starts fresh: skip-gaps only reacts to playing past an incident
   if (S.mode !== 'review') return reviewAt(T);
   if (T > nowS() - LIVE_EDGE) return goLive();
   S.playT = T;
@@ -823,7 +827,7 @@ async function loadTile(id, T) {
     t.state = 'none'; v.removeAttribute('src'); v.load();
     setOverlay(id, 'No recording at this time'); setBadge(id); return;
   }
-  t.state = 'loading';
+  t.state = 'loading'; t.loadAt = performance.now();
   setOverlay(id, '<span class="spin"></span>Loading recording…');
   let start = Math.floor(T), direct = useDirect() && !t.forceCompat;
   const dur = clamp(Math.ceil(cov.until - start) + 2, 5, PLAY_WINDOW);
@@ -849,6 +853,13 @@ async function loadTile(id, T) {
   setBadge(id);
 }
 const tileIsLarge = id => tiles[id].el.clientHeight > 420;
+// Transcoded streams arrive faster than real time, so a lagging camera can usually
+// just jump forward inside what it has already downloaded.
+function canSeekTo(t, T) {
+  const off = T - t.start, b = t.video.buffered;
+  for (let i = 0; i < b.length; i++) if (off >= b.start(i) && off <= b.end(i) - 0.5) return true;
+  return false;
+}
 function tileTime(id) {
   const t = tiles[id];
   if (!t || !['playing', 'buffering', 'paused'].includes(t.state)) return null;
@@ -858,6 +869,10 @@ function onTilePlaying(id) {
   const t = tiles[id];
   if (S.mode === 'live') { t.state = 'live'; setOverlay(id, ''); return; }
   if (t.state === 'none') return;
+  if (t.state === 'loading' && t.loadAt) {
+    const sec = (performance.now() - t.loadAt) / 1000;
+    t.loadSec = t.loadSec ? (t.loadSec + sec) / 2 : sec;   // smoothed, per camera
+  }
   t.state = 'playing'; setOverlay(id, '');
   t.video.playbackRate = S.speed;
   if (t.direct && !t.checked) {
@@ -929,17 +944,28 @@ function syncTick() {
     if (t.state === 'paused') t.state = 'playing';
     if (c.id === m) { v.playbackRate = S.speed; inSync++; continue; }
     const d = tileTime(c.id) - S.playT;
-    if (Math.abs(d) > 4) { if (t.reloads.length < 3) loadTile(c.id, S.playT + 1); }
+    if (Math.abs(d) > 2 && canSeekTo(t, S.playT)) { v.currentTime = S.playT - t.start; }
+    else if (Math.abs(d) > 4) {
+      // Far off and not buffered: reload where the clock will be once this camera
+      // is up (its measured load time), or it comes back just as far behind.
+      if (t.reloads.length < 3) loadTile(c.id, S.playT + clamp(t.loadSec || 4, 1, 12) * S.speed);
+    }
     else if (Math.abs(d) > 0.5) v.playbackRate = S.speed * (d > 0 ? 0.8 : 1.25);
     else { v.playbackRate = S.speed; inSync++; }
   }
-  // Skip quiet gaps: when playback runs out of an incident, jump to the next one.
+  // Skip quiet gaps (opt-in): once playback is well past an incident's last motion
+  // (people often stay in view after the events stop), jump over a long silence.
   const cur = incidentAt(S.playT);
-  if ($('#skipgaps').checked && !S.paused && lastInside && !cur) {
+  if ($('#skipgaps').checked && !S.paused && lastInside && S.playT > lastInside.end + SKIP_TAIL) {
     const nx = nextIncident(lastInside.end + 1);
-    if (nx) { lastInside = null; S.selInc = nx.id; seekAll(nx.start - LEAD); return; }
+    const gap = nx ? nx.start - LEAD - S.playT : 0;
+    lastInside = null;
+    if (nx && gap > SKIP_MIN_GAP) {
+      toast(`Skipped ${fmtDur(gap)} with no motion → ${fmtTime(nx.start)}`);
+      S.selInc = nx.id; seekAll(nx.start - LEAD); return;
+    }
   }
-  lastInside = cur || (lastInside && S.playT < lastInside.end + 11 ? lastInside : null);
+  if (cur) lastInside = cur;
   const chip = $('#syncchip');
   const loading = cameras.filter(c => tiles[c.id].state === 'loading').length;
   if (loading) { chip.className = 'syncchip wait'; chip.textContent = `loading ${loading} camera${loading > 1 ? 's' : ''}…`; }
@@ -1426,6 +1452,9 @@ $('#pinc').onclick = () => { const cur = currentIncident(); const i = prevIncide
 $('#ninc').onclick = () => { const cur = currentIncident(); const i = nextIncident(cur ? cur.start + 1 : S.playT); if (i) playIncident(i); else toast('No newer incident — press Go live for now.'); };
 $('#speed').onchange = e => { S.speed = +e.target.value; for (const c of cameras) tiles[c.id].video.playbackRate = S.speed; };
 $('#quality').value = localStorage.getItem('quality') || 'auto';
+// Off by default: a picked clip should simply keep playing, like any video.
+try { $('#skipgaps').checked = localStorage.getItem('skipGaps') === '1'; } catch {}
+$('#skipgaps').onchange = e => { try { localStorage.setItem('skipGaps', e.target.checked ? '1' : '0'); } catch {} };
 $('#quality').onchange = e => {
   localStorage.setItem('quality', e.target.value);
   if (e.target.value === 'direct') localStorage.removeItem('hevcBad');
