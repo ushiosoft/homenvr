@@ -244,7 +244,9 @@ def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]:
     return [
         FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "warning",
         *input_args(cam.live_url, cfg.rtsp_transport),
-        "-map", "0:v:0", *video, "-an",
+        # Audio (G.711 on these cameras) is transcoded to AAC so the browser can
+        # play it; the UI keeps every tile muted until the user turns sound on.
+        "-map", "0:v:0", *video, *(_audio_args(cam.audio, info.get("audio")) or ["-an"]),
         "-f", "hls", "-hls_time", str(HLS_SEG_SECONDS), "-hls_list_size", "8",
         # split_by_time: don't wait past hls_time for a keyframe on copy streams.
         "-hls_flags", "delete_segments+omit_endlist+independent_segments+split_by_time",

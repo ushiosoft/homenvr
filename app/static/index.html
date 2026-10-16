@@ -242,6 +242,20 @@
   input[type=range] { accent-color:var(--accent); flex:1; min-width:120px; }
   .rangeval { min-width:44px; text-align:right; font-family:var(--mono); color:var(--fg); }
   .rangehint { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; margin:-2px 0 6px 180px; }
+  .btn.on { border-color:var(--accent); background:#1c2635; color:#bfdbfe; }
+  .iconbtn.snd.on { background:var(--accent); color:var(--accent-ink); }
+  .tile .sndbadge { position:absolute; left:10px; bottom:10px; z-index:2; background:var(--accent); color:var(--accent-ink); border-radius:6px; padding:3px 6px; display:none; pointer-events:none; }
+  .tile.audible .sndbadge { display:flex; }
+  .savedgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+  .scard.clip { margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column; max-width:none; }
+  .clip .thumb { position:relative; border:0; padding:0; background:#000; cursor:pointer; display:block; aspect-ratio:16/9; }
+  .clip .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .clip .thumb .play { position:absolute; inset:0; margin:auto; width:52px; height:52px; border-radius:50%; background:rgba(10,12,15,.7); color:#fff; display:flex; align-items:center; justify-content:center; }
+  .clip .meta { padding:10px 12px 12px; display:flex; flex-direction:column; gap:8px; }
+  .clip .meta b { font-weight:500; word-break:break-all; }
+  .clip .acts { display:flex; gap:8px; }
+  .clip .acts .btn { height:36px; }
+  #modal video { max-width:min(92vw,1100px); max-height:75vh; display:block; background:#000; border-radius:6px; }
   .camblock { border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
   .camblock .ctitle { font-weight:600; margin-bottom:4px; }
 
@@ -358,7 +372,7 @@
           <button class="btn big" id="replay"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>Replay last 30 s</button>
           <button class="btn big" id="latest"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 20L9 12l10-8v16z"/><path d="M5 19V5"/></svg>Latest incident</button>
           <span class="hint">Live preview is the cameras' 640×360 stream; scrubbing back plays the recordings.</span>
-          <span class="right"><button class="btn" id="snap">Snapshot</button></span>
+          <span class="right"><button class="btn soundbtn"></button><button class="btn" id="snap">Snapshot</button></span>
         </div>
         <div id="tp-rev" style="display:none">
           <button class="ibtn" id="pinc" aria-label="Previous incident" title="Previous (older) incident"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 20L9 12l10-8v16z"/><path d="M5 19V5"/></svg></button>
@@ -372,6 +386,7 @@
             <label class="chk"><input type="checkbox" id="skipgaps" checked>Skip quiet gaps</label>
             <label class="sel-lbl">Speed <select id="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
             <label class="sel-lbl">Quality <select id="quality"><option value="auto">Auto</option><option value="direct">2K direct</option><option value="compat">Compatible</option></select></label>
+            <button class="btn soundbtn"></button>
             <button class="btn" id="download">Download clip</button>
             <button class="btn keep" id="keep">Keep</button>
           </span>
@@ -428,7 +443,7 @@ const api = p => fetch(p).then(r => { if (!r.ok) throw new Error(r.status); retu
 const post = (p, body) => fetch(p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   .then(async r => { if (!r.ok) throw new Error((await r.text()).slice(0, 160) || r.status); return r.json(); });
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const fmtBytes = b => b > 1e12 ? (b / 1e12).toFixed(2) + ' TB' : (b / 1e9).toFixed(1) + ' GB';
+const fmtBytes = b => b > 1e12 ? (b / 1e12).toFixed(2) + ' TB' : b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.max(0.1, b / 1e6).toFixed(b < 1e7 ? 1 : 0) + ' MB';
 const pad = n => String(n).padStart(2, '0');
 const fmtTime = t => { const d = new Date(t * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
 const fmtHM = t => { const d = new Date(t * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -449,6 +464,8 @@ function toast(msg, ms = 3500) {
 }
 const ICON_PLAY = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z"/></svg>';
 const ICON_PAUSE = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+const ICON_SPK_ON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+const ICON_SPK_OFF = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/></svg>';
 const isWall = new URLSearchParams(location.search).has('wall');
 const isPhone = () => matchMedia('(max-width:760px)').matches;
 
@@ -465,6 +482,7 @@ const S = {
   playT: 0,            // review: current time on the master clock
   paused: false,
   speed: 1,
+  sound: false,        // sound on for the selected camera (one camera audible at a time)
   halfStart: 0,        // 30-min zoom window start
   inc: null,           // /api/incidents response
   tl: null,            // /api/timeline response
@@ -485,7 +503,7 @@ function tryPlay(video) {
   // Chrome blocks concurrent autoplay unless muted is set as a *property*.
   video.muted = true;
   const p = video.play();
-  if (p) p.catch(() => {
+  if (p) p.then(applyAudio, () => {
     const wrap = video.closest('.tile');
     if (wrap && !wrap.querySelector('.playtap')) {
       const b = document.createElement('button');
@@ -624,9 +642,10 @@ function buildGrid() {
     el.className = 'tile'; el.dataset.cam = c.id;
     el.innerHTML = `<video muted playsinline></video>
       <span class="name"></span><span class="badge"></span>
-      <div class="over hidden"></div>
+      <div class="over hidden"></div><span class="sndbadge">${ICON_SPK_ON}</span>
       <div class="side"></div>
       <div class="ctls">
+        <button class="iconbtn snd" title="Sound" aria-label="Sound"></button>
         <button class="iconbtn snap" title="Snapshot" aria-label="Snapshot">▣</button>
         <button class="iconbtn zin" title="Zoom in" aria-label="Zoom in">+</button>
         <button class="iconbtn zout" title="Zoom out" aria-label="Zoom out">−</button>
@@ -637,6 +656,7 @@ function buildGrid() {
     const v = el.querySelector('video');
     makeInteractive(v);
     onTap(el.querySelector('.snap'), () => openSnapshot(c.id, c.name));
+    onTap(el.querySelector('.snd'), () => toggleSound(c.id));
     onTap(el.querySelector('.zin'), () => zoomStep(v, 1));
     onTap(el.querySelector('.zout'), () => zoomStep(v, -1));
     onTap(el.querySelector('.rot'), () => rotateCam(c.id));
@@ -680,6 +700,7 @@ function layoutGrid() {
 function selectCam(id) {
   S.selCam = id;
   layoutGrid();
+  applyAudio();
   renderLanesSel();
   renderTransportLabels();
 }
@@ -800,7 +821,7 @@ async function loadTile(id, T) {
   applyXform(v);
   v.src = direct ? `api/cameras/${id}/remux.mp4?start=${start.toFixed(3)}&dur=${dur}`
                  : `api/cameras/${id}/playback.mp4?start=${start}&dur=${dur}&height=${t.height}`;
-  v.muted = true;
+  v.muted = !(S.sound && id === S.selCam);
   v.playbackRate = S.speed;
   // Direct play starts at the keyframe just before T (t.start is exact, so the clock
   // stays right); the stream isn't seekable, so we don't skip ahead to T.
@@ -951,14 +972,18 @@ async function loadCameras() {
   cameras = await api('api/cameras');
   for (const c of cameras) camRot[c.id] = c.rotation || 0;
   if (!S.selCam && cameras.length) S.selCam = cameras[0].id;
-  const st = await api('api/status');
+  const rec = cameras.filter(c => c.status && c.status.record && c.status.record.running).length;
+  const w = $('#wrec'); w.textContent = `Recording · ${rec} of ${cameras.length} cameras`; w.classList.toggle('bad', rec < cameras.length);
+  if (rec === cameras.length) w.textContent = `Recording · ${rec} camera${rec === 1 ? '' : 's'}`;
+  loadStatus();  // storage usage is slow to compute: don't hold the page for it
+}
+async function loadStatus() {
+  let st;
+  try { st = await api('api/status'); } catch { return; }
   const r = st.retention, s = st.storage;
   const grace = s.grace_bytes ? ` · ${fmtBytes(s.grace_bytes)} grace` : '';
   const saved = s.saved_bytes ? ` · ${fmtBytes(s.saved_bytes)} saved` : '';
   $('#usage').textContent = `${fmtBytes(s.recordings_bytes)} recorded${grace}${saved} · ${fmtBytes(s.disk_free_bytes)} free · keep ${r.max_days || '∞'} d`;
-  const rec = cameras.filter(c => c.status && c.status.record && c.status.record.running).length;
-  const w = $('#wrec'); w.textContent = `Recording · ${rec} of ${cameras.length} cameras`; w.classList.toggle('bad', rec < cameras.length);
-  if (rec === cameras.length) w.textContent = `Recording · ${rec} camera${rec === 1 ? '' : 's'}`;
 }
 
 // ---------------------------------------------------------------- render: toolbar + transport
@@ -1391,6 +1416,32 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Escape' && S.mode === 'review' && !fsElement()) goLive();
 });
 
+// ---------------------------------------------------------------- sound
+// Sound follows the selected camera; every other tile stays muted. Unmuting happens
+// inside a tap/click, which is what browsers require before playing audio.
+function toggleSound(id) {
+  if (id && id !== S.selCam) { S.sound = true; selectCam(id); return; }
+  S.sound = !S.sound;
+  applyAudio();
+  if (S.sound) { const v = tiles[S.selCam] && tiles[S.selCam].video; if (v && v.paused && S.mode === 'live') v.play().catch(() => {}); }
+}
+function applyAudio() {
+  for (const c of cameras) {
+    const t = tiles[c.id]; if (!t) continue;
+    const on = S.sound && !isWall && c.id === S.selCam;
+    t.video.muted = !on;
+    t.el.classList.toggle('audible', on);
+    const b = t.el.querySelector('.snd');
+    b.innerHTML = on ? ICON_SPK_ON : ICON_SPK_OFF; b.classList.toggle('on', on);
+    b.title = on ? 'Mute' : 'Sound on'; b.setAttribute('aria-label', b.title);
+  }
+  for (const b of document.querySelectorAll('.soundbtn')) {
+    b.innerHTML = (S.sound ? ICON_SPK_ON : ICON_SPK_OFF) + `<span>Sound ${S.sound ? 'on' : 'off'} · ${esc(camName(S.selCam))}</span>`;
+    b.classList.toggle('on', S.sound); b.setAttribute('aria-pressed', S.sound);
+  }
+}
+document.querySelectorAll('.soundbtn').forEach(b => b.onclick = () => toggleSound());
+
 // ---------------------------------------------------------------- snapshot modal
 async function openSnapshot(camId, name) {
   const m = document.createElement('div'); m.id = 'modal';
@@ -1425,23 +1476,41 @@ async function renderSaved() {
   let clips;
   try { clips = await api('api/saved'); } catch { root.innerHTML = '<p class="hint">Failed to load.</p>'; return; }
   if (!clips.length) { root.innerHTML = '<div class="scard"><h3>Saved clips</h3><p class="hint">None yet. While reviewing, press <b>Keep</b> to save the incident (or 60 s). Saved clips are never auto-deleted.</p></div>'; return; }
-  root.innerHTML = `<div class="scard"><h3>Saved clips (${clips.length})</h3>
-    <p class="hint">Permanent — excluded from retention. Total ${fmtBytes(clips.reduce((a, c) => a + c.size, 0))}.</p><div id="savedlist"></div></div>`;
+  root.innerHTML = `<div style="display:flex;align-items:baseline;gap:8px"><h2>Saved clips (${clips.length})</h2>
+    <span class="sub">Permanent — excluded from retention · ${fmtBytes(clips.reduce((a, c) => a + c.size, 0))}</span></div>
+    <div class="savedgrid" id="savedlist"></div>`;
   const list = $('#savedlist');
   for (const c of clips) {
-    const row = document.createElement('div'); row.className = 'frow';
-    row.innerHTML = `<b style="flex:1;min-width:200px;word-break:break-all">${esc(c.name)}</b>
-      <span class="sub">${fmtBytes(c.size)} · ${new Date(c.ctime * 1000).toLocaleString()}</span>
-      <a class="btn" href="saved/${encodeURIComponent(c.name)}" target="_blank">Open</a>
-      <a class="btn" href="saved/${encodeURIComponent(c.name)}" download>Download</a>
-      <button class="btn del">Delete</button>`;
-    row.querySelector('.del').onclick = async () => {
+    const cam = camById(c.name.split('-')[0]);
+    const n = encodeURIComponent(c.name);
+    const card = document.createElement('div'); card.className = 'scard clip';
+    card.innerHTML = `<button class="thumb" aria-label="Play ${esc(c.name)}">
+        <img alt="" loading="lazy" src="api/saved/${n}/thumb" onerror="this.classList.add('broken')">
+        <span class="play">${ICON_PLAY}</span></button>
+      <div class="meta"><b>${esc(c.name)}</b>
+        <span class="sub">${cam ? esc(cam.name) + ' · ' : ''}${fmtBytes(c.size)} · saved ${new Date(c.ctime * 1000).toLocaleString()}</span>
+        <span class="acts"><a class="btn" href="saved/${n}" download>Download</a><button class="btn del">Delete</button></span></div>`;
+    card.querySelector('.thumb').onclick = () => playSaved(c);
+    card.querySelector('.del').onclick = async () => {
       if (!confirm('Delete saved clip ' + c.name + '?')) return;
-      await fetch('api/saved/' + encodeURIComponent(c.name), { method: 'DELETE' });
+      await fetch('api/saved/' + n, { method: 'DELETE' });
       renderSaved(); loadCameras();
     };
-    list.appendChild(row);
+    list.appendChild(card);
   }
+}
+// Saved clips are the original HEVC files; play them through the H.264 transcode
+// (with sound) so they work in every browser. Download keeps the original.
+function playSaved(c) {
+  const n = encodeURIComponent(c.name);
+  const m = document.createElement('div'); m.id = 'modal';
+  m.innerHTML = `<div class="box"><video controls autoplay playsinline src="api/saved/${n}/play.mp4"></video>
+    <div class="mbar"><b style="flex:1;word-break:break-all">${esc(c.name)}</b>
+    <a class="btn" href="saved/${n}" download>Download</a><button class="btn" id="m_close">Close</button></div></div>`;
+  const close = () => { const v = m.querySelector('video'); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
+  m.onclick = e => { if (e.target === m) close(); };
+  m.querySelector('#m_close').onclick = close;
+  document.body.appendChild(m);
 }
 
 // ---------------------------------------------------------------- settings
@@ -1568,6 +1637,7 @@ window.addEventListener('hashchange', () => tab(tabFromHash()));
     await loadCameras();
     S.dayStart = todayStart();
     buildGrid();
+    applyAudio();
     tab(isWall ? 'cameras' : tabFromHash());
     const l = $('#loading'); l.classList.add('gone'); setTimeout(() => l.classList.add('hidden'), 400);
     refreshData();
@@ -1579,7 +1649,7 @@ window.addEventListener('hashchange', () => tab(tabFromHash()));
   setInterval(syncTick, 250);
   setInterval(() => { if (S.mode === 'live') renderClock(); }, 1000);
   setInterval(() => { if (isToday() && !$('#cameras').classList.contains('hidden')) refreshData(); }, 20000);
-  setInterval(() => loadCameras().catch(() => {}), 15000);
+  setInterval(() => loadCameras().catch(() => {}), 30000);
   let wasPhone = isPhone();
   window.addEventListener('resize', () => { if (isPhone() !== wasPhone) { wasPhone = isPhone(); layoutGrid(); renderTimeline(); } });
 })();

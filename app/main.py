@@ -254,7 +254,7 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     async def remux(cam_id: str, start: float = Query(...), dur: float = Query(300)):
         """Direct play: the original 2K stream, stream-copied (no re-encode, ~0 CPU) into
         fragmented MP4. Only for browsers that decode the camera codec (HEVC). Not
-        rotated — the client rotates it like live view. No audio (the grid is muted)."""
+        rotated — the client rotates it like live view. Audio (AAC) is copied as-is."""
         camera_or_404(cam_id)
         dur = min(max(dur, 1), 1800)
         script = storage.concat_list(cam_id, start, start + dur)
@@ -264,7 +264,7 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         first = re.search(r"^file '(.+)'$", script, re.M).group(1)
         codec = await probe_file_codec(first)
         return await _stream_ffmpeg(script, ["-t", str(dur), "-map", "0:v:0", "-c:v", "copy",
-                                             *_video_tag(codec), "-an"])
+                                             *_video_tag(codec), "-map", "0:a:0?", "-c:a", "copy"])
 
     async def _stream_ffmpeg(script: str, out_args: list[str]) -> StreamingResponse:
         """Run ffmpeg over a concat script and stream its fragmented-MP4 output."""
@@ -350,7 +350,22 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
             raise
         finally:
             _rmtree(tmpdir)
+        try:
+            await _saved_thumb(saved)
+        except Exception as e:  # the clip is saved; a missing thumbnail is regenerated on view
+            log.warning("saved thumbnail failed for %s: %s", fname, e)
         return {"saved": fname, "size": saved.stat().st_size}
+
+    async def _saved_thumb(clip: Path) -> Path:
+        """<clip>.jpg beside a saved clip, from ~10 s in (incident clips start with a
+        10 s lead-in), rotated like the camera. Built once."""
+        jpg = clip.with_suffix(".jpg")
+        if not jpg.is_file():
+            from .recorder import save_thumb, thumbnail
+            cam = cfg.camera(clip.name.split("-", 1)[0])
+            img = await thumbnail(clip, 10, width=480, rot=cam.rotation if cam else 0)
+            await asyncio.to_thread(save_thumb, jpg, img)
+        return jpg
 
     @app.get("/api/saved")
     async def list_saved():
@@ -374,18 +389,61 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
             raise HTTPException(404)
         return FileResponse(p, media_type="video/mp4")
 
+    @app.get("/api/saved/{name}/thumb")
+    async def saved_thumb(name: str):
+        p = _safe_saved(name)
+        if not p:
+            raise HTTPException(404)
+        try:
+            jpg = await _saved_thumb(p)
+        except Exception as e:
+            raise HTTPException(502, f"thumbnail failed: {e}")
+        return FileResponse(jpg, media_type="image/jpeg", headers={"Cache-Control": "max-age=86400"})
+
+    @app.get("/api/saved/{name}/play.mp4")
+    async def saved_play(name: str, height: int = Query(720, ge=240, le=1440)):
+        """A saved clip transcoded to H.264 (rotated), for browsers that can't play the
+        original HEVC file. Download still gives the untouched original."""
+        p = _safe_saved(name)
+        if not p:
+            raise HTTPException(404)
+        from .recorder import rotation_vf
+        cam = cfg.camera(name.split("-", 1)[0])
+        rv = rotation_vf(cam.rotation if cam else 0)
+        vf = (rv + "," if rv else "") + f"scale=-2:{height - height % 2}"
+        script = f"ffconcat version 1.0\nfile '{p.as_posix()}'\n"
+        return await _stream_ffmpeg(script, [
+            "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "96k"])
+
     @app.delete("/api/saved/{name}")
     async def delete_saved(name: str):
         p = _safe_saved(name)
         if not p:
             raise HTTPException(404)
         p.unlink()
+        p.with_suffix(".jpg").unlink(missing_ok=True)
         return {"deleted": name}
+
+    usage_cache: dict = {"t": 0.0, "val": None, "task": None}
+
+    async def cached_usage() -> dict:
+        """storage.usage() stats every segment file (seconds on a big archive), so
+        serve a cached copy and refresh it in the background once it's a minute old."""
+        async def refresh():
+            usage_cache["val"] = await asyncio.to_thread(storage.usage)
+            usage_cache["t"] = time.monotonic()
+        stale = time.monotonic() - usage_cache["t"] > 60
+        if usage_cache["val"] is None:
+            await refresh()
+        elif stale and (usage_cache["task"] is None or usage_cache["task"].done()):
+            usage_cache["task"] = asyncio.create_task(refresh())
+        return usage_cache["val"]
 
     @app.get("/api/status")
     async def status():
         r = cfg.retention
-        return {"storage": await asyncio.to_thread(storage.usage),
+        return {"storage": await cached_usage(),
                 "retention": {"max_gb": r.max_gb, "max_days": r.max_days, "min_free_gb": r.min_free_gb},
                 "segment_seconds": cfg.segment_seconds,
                 "alerts": {"notifier": cfg.alerts.notifier},
