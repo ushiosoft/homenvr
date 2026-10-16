@@ -542,7 +542,10 @@ function attachHls(video, src) {
   // audio (DEMUXER_ERROR_COULD_NOT_PARSE). Native HLS only where hls.js can't run
   // (iPhone Safari).
   if (window.Hls && Hls.isSupported()) {
-    const h = new Hls({ liveSyncDurationCount: 2, maxLiveSyncPlaybackRate: 1.5 });
+    // 2 segments (= 2 s) behind the live edge; if it falls 6+ behind (Wi-Fi hiccup)
+    // it speeds up slightly to catch back up instead of staying late.
+    const h = new Hls({ liveSyncDurationCount: 2, liveMaxLatencyDurationCount: 6,
+                        maxLiveSyncPlaybackRate: 1.5, backBufferLength: 10 });
     h.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setTimeout(() => { h.loadSource(src); h.startLoad(); }, 3000); });
     h.on(Hls.Events.MANIFEST_PARSED, () => tryPlay(video));
     h.loadSource(src); h.attachMedia(video); return h;

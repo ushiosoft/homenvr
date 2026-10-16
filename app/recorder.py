@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import logging
 import os
 import re
@@ -153,7 +154,7 @@ async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: f
 async def live_frames(live_dir, cam_id: str, since: float, max_segments: int = 3, fps: float = 2,
                       width: int = 640, timeout: float = 20, rot: int = 0) -> list[bytes]:
     """JPEG frames (fps per second) from the live segments finished at or after the
-    wall-clock time `since` (at most max_segments of them, ~2 s each), oldest first."""
+    wall-clock time `since` (at most max_segments of them), oldest first."""
     init, segs = _live_segments(live_dir, cam_id)
     recent = [p for p in segs if p.stat().st_mtime >= since][:max_segments] or segs[-1:]
     tmp = _concat_tmp(init, recent)
@@ -312,7 +313,10 @@ def record_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]
     ]
 
 
-HLS_SEG_SECONDS = 2  # segment length; also the forced-keyframe interval
+# Live HLS segment length, also the forced-keyframe interval. 1 s keeps the live
+# picture ~2-3 s behind (the player sits 2 segments back from the newest).
+HLS_SEG_SECONDS = 1
+HLS_LIST_SIZE = 14   # playlist window (s at 1 s/segment): covers the ~10 s burst below
 CAPTURE_AFTER = 4.5  # seconds after a motion trigger to wait before picking its frame
 
 
@@ -333,7 +337,7 @@ def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]:
         # Audio (G.711 on these cameras) is transcoded to AAC so the browser can
         # play it; the UI keeps every tile muted until the user turns sound on.
         "-map", "0:v:0", *video, *(_audio_args(cam.audio, info.get("audio")) or ["-an"]),
-        "-f", "hls", "-hls_time", str(HLS_SEG_SECONDS), "-hls_list_size", "8",
+        "-f", "hls", "-hls_time", str(HLS_SEG_SECONDS), "-hls_list_size", str(HLS_LIST_SIZE),
         # split_by_time: don't wait past hls_time for a keyframe on copy streams.
         "-hls_flags", "delete_segments+omit_endlist+independent_segments+split_by_time",
         "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4",
@@ -502,7 +506,8 @@ class Supervisor:
         await asyncio.sleep(max(0.0, ts + CAPTURE_AFTER - time.time()))
         rot = getattr(cam, "rotation", 0)
         try:
-            frames = await live_frames(self.cfg.live_dir, cam.id, since=ts - 4.5, max_segments=5, rot=rot)
+            frames = await live_frames(self.cfg.live_dir, cam.id, since=ts - 4.5,
+                                       max_segments=math.ceil(10 / HLS_SEG_SECONDS), rot=rot)
         except Exception as e:
             log.debug("[%s] frame burst failed (%s); single snapshot", cam.id, e)
             img = await snapshot_camera(cam, self.cfg)
