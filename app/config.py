@@ -64,6 +64,7 @@ class Camera:
     enabled: bool = True
     rotation: int = 0  # display rotation in degrees: 0/90/180/270
     motion_sensitivity: float = 0.0  # per-camera override of motion.sensitivity (0 = use global)
+    push_on: str = ""  # per-camera override of alerts.push_on ("" = use global)
 
 
 @dataclass
@@ -85,6 +86,9 @@ class Alerts:
     check_interval: int = 60
     motion_push: bool = False  # push a snapshot notification on motion
     motion_push_cooldown: int = 0  # min seconds between motion pushes per camera (0 = every event)
+    # Which motion events are pushed: "person" (default), "person_vehicle", or
+    # "motion" (every event). Needs object detection; without it, every event is.
+    push_on: str = "person"
 
 
 @dataclass
@@ -162,6 +166,7 @@ def parse(raw: dict) -> Config:
                 enabled=bool(c.get("enabled", True)),
                 rotation=int(c.get("rotation", 0)),
                 motion_sensitivity=float(c.get("motion_sensitivity", 0) or 0),
+                push_on=str(c.get("push_on", "") or ""),
             )
         )
 
@@ -195,6 +200,7 @@ def parse(raw: dict) -> Config:
             check_interval=int(a.get("check_interval", 60)),
             motion_push=bool(a.get("motion_push", False)),
             motion_push_cooldown=int(a.get("motion_push_cooldown", 0)),
+            push_on=str(a.get("push_on", "person")),
         ),
         motion=Motion(
             enabled=bool(m.get("enabled", False)),

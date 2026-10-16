@@ -209,6 +209,16 @@ def pick_frame(frames: list[bytes], scores: list[dict[str, float]]) -> tuple[int
     return trigger_index(len(frames)), labels
 
 
+def should_push(policy: str, labels: list[str]) -> bool:
+    """alerts.push_on: "motion" pushes every event, "person" needs a person,
+    "person_vehicle" a person or a vehicle (moving, per analyze_burst)."""
+    if policy == "motion":
+        return True
+    if policy == "person_vehicle":
+        return bool(labels)
+    return "person" in labels
+
+
 def trigger_index(n: int) -> int:
     return min(n - 1, int(n * 0.6))
 
@@ -452,6 +462,10 @@ class Supervisor:
         """On every motion event: run object detection to label it, and (if enabled)
         push a snapshot notification. One snapshot is captured and reused for both.
 
+        Which events are pushed follows alerts.push_on (per-camera override
+        camera.push_on): "person", "person_vehicle" or "motion". Every event is still
+        recorded and labelled either way; only the notification is filtered.
+
         Event cadence is bounded by motion.min_gap_seconds; motion_push_cooldown
         (default 0 = every event) can throttle pushes; an in-flight guard per camera
         prevents pile-ups.
@@ -465,6 +479,8 @@ class Supervisor:
         want_thumb = eid is not None
         push_ready = a.motion_push and a.notifier != "none"
         push_now = push_ready and not (a.motion_push_cooldown and ts - self._motion_push_at.get(cam_id, 0.0) < a.motion_push_cooldown)
+        # Without a working detector there are no labels to filter on: push every event.
+        policy = (cam.push_on or a.push_on) if want_detect else "motion"
         if not (want_detect or want_thumb or push_now):
             return
         if cam_id in self._motion_pushing:
@@ -479,7 +495,9 @@ class Supervisor:
             if want_detect:
                 if self.events is not None:
                     await asyncio.to_thread(self.events.set_label, eid, ",".join(labels))
-            if push_now:
+            if push_now and not should_push(policy, labels):
+                log.debug("[%s] not pushed (push_on=%s, labels=%s)", cam_id, policy, labels or "none")
+            elif push_now:
                 self._motion_push_at[cam_id] = ts
                 from .alerts import make_notifier
                 when = time.strftime("%H:%M:%S", time.localtime(ts))
@@ -501,6 +519,8 @@ class Supervisor:
         frame was itself ~4 s old. Instead wait a few seconds past the trigger,
         decode a ~10 s burst at 2 fps (≈6 s before to 4 s after) from the live
         segments, and keep the frame with the most confident person (else vehicle).
+        Only moving objects seen in 2+ frames count (ObjectDetector.analyze_burst),
+        so parked cars and furniture don't become labels.
         Pushes arrive ~5 s later than before, but show the subject.
         """
         await asyncio.sleep(max(0.0, ts + CAPTURE_AFTER - time.time()))
@@ -514,8 +534,8 @@ class Supervisor:
             return img, (await asyncio.to_thread(self.detector.detect, img) if detect else [])
         if not detect:
             return frames[trigger_index(len(frames))], []
-        scores = await asyncio.to_thread(lambda: [self.detector.scores(f) for f in frames])
-        i, labels = pick_frame(frames, scores)
+        scores, labels = await asyncio.to_thread(self.detector.analyze_burst, frames)
+        i, _ = pick_frame(frames, scores)
         return frames[i], labels
 
     async def start(self) -> None:

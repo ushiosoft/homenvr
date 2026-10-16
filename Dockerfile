@@ -6,7 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-# Object-detection model (MobileNet-SSD, Pascal VOC) for person/vehicle labels.
+# Object detection for person/vehicle labels: YOLOX-tiny (Megvii, Apache-2.0) is the
+# default; MobileNet-SSD (Pascal VOC) is the fallback if the YOLOX file is missing.
+ADD https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.onnx /models/yolox_tiny.onnx
 ADD https://raw.githubusercontent.com/djmv/MobilNet_SSD_opencv/master/MobileNetSSD_deploy.prototxt /models/MobileNetSSD_deploy.prototxt
 ADD https://raw.githubusercontent.com/djmv/MobilNet_SSD_opencv/master/MobileNetSSD_deploy.caffemodel /models/MobileNetSSD_deploy.caffemodel
 # Vendored so the UI works without internet access.

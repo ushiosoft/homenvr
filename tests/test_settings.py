@@ -90,3 +90,17 @@ def test_per_camera_settings(tmp_path):
                   "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
     s.apply(cfg2, s.load_overlay(path))
     assert cfg2.camera("cam1").name == "Porch" and cfg2.camera("cam1").rotation == 90
+
+
+def test_push_on_setting(tmp_path):
+    from app import settings as s
+    from app.config import parse
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    assert cfg.alerts.push_on == "person" and cfg.cameras[0].push_on == ""
+    s.update(cfg, tmp_path / "settings.json", {"alerts": {"push_on": "person_vehicle"},
+                                               "cameras": {"cam1": {"push_on": "motion"}}})
+    assert cfg.alerts.push_on == "person_vehicle" and cfg.cameras[0].push_on == "motion"
+    assert s.current(cfg)["cameras"][0]["push_on"] == "motion"
+    import pytest
+    with pytest.raises(ValueError):
+        s.update(cfg, tmp_path / "settings.json", {"alerts": {"push_on": "cats"}})

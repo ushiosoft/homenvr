@@ -21,6 +21,8 @@ from .config import Config
 
 MASK = "••••••••"
 
+PUSH_ON = ["person", "person_vehicle", "motion"]
+
 # Which config fields the settings page may change, and their types.
 SCHEMA = {
     "alerts": {
@@ -31,6 +33,7 @@ SCHEMA = {
         "stale_segment_seconds": ("int", (10, 86400)),
         "motion_push": ("bool", None),
         "motion_push_cooldown": ("int", (10, 86400)),
+        "push_on": ("enum", PUSH_ON),
     },
     "motion": {
         "sensitivity": ("float", (0.1, 255.0)),
@@ -48,6 +51,7 @@ CAMERA_SCHEMA = {
     "name": ("str", None),
     "rotation": ("enum_int", [0, 90, 180, 270]),
     "motion_sensitivity": ("float", (0.0, 255.0)),
+    "push_on": ("enum", [""] + PUSH_ON),  # "" = use the global setting
 }
 _SECRET_FIELDS = {"ntfy_url", "webhook_url"}  # telegram.bot_token handled separately
 
@@ -129,12 +133,13 @@ def current(cfg: Config) -> dict:
             "stale_segment_seconds": a.stale_segment_seconds,
             "motion_push": a.motion_push,
             "motion_push_cooldown": a.motion_push_cooldown,
+            "push_on": a.push_on,
         },
         "motion": {"enabled": m.enabled, "sensitivity": m.sensitivity,
                    "min_gap_seconds": m.min_gap_seconds, "detect": m.detect},
         "retention": {"max_days": r.max_days, "max_gb": r.max_gb, "min_free_gb": r.min_free_gb},
         "cameras": [{"id": c.id, "name": c.name, "rotation": c.rotation,
-                     "motion_sensitivity": c.motion_sensitivity} for c in cfg.cameras],
+                     "motion_sensitivity": c.motion_sensitivity, "push_on": c.push_on} for c in cfg.cameras],
     }
 
 

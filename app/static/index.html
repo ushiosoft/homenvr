@@ -1618,6 +1618,7 @@ function playSaved(c) {
 }
 
 // ---------------------------------------------------------------- settings
+const PUSH_ON_OPTS = [['person', 'A person is detected'], ['person_vehicle', 'A person or moving vehicle is detected'], ['motion', 'Any motion (every event)']];
 async function renderSettings() {
   const root = $('#settings');
   root.innerHTML = '<p class="hint">Loading…</p>';
@@ -1636,6 +1637,8 @@ async function renderSettings() {
       <div class="frow nf nf-telegram"><label>Telegram chat ID</label><input id="s_tg_chat" value="${esc(a.telegram.chat_id)}" placeholder="e.g. 123456789"></div>
       <div class="frow"><label>Alert if stalled (sec)</label><input id="s_stale" type="number" min="10" value="${a.stale_segment_seconds}"></div>
       <div class="frow"><label>Push motion snapshots</label><input id="s_mpush" type="checkbox" ${a.motion_push ? 'checked' : ''}><span class="sub">send a photo notification when motion is detected</span></div>
+      <div class="frow"><label>Push when</label><select id="s_pushon">${PUSH_ON_OPTS.map(([v, l]) => `<option value="${v}"${v === (a.push_on || 'person') ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="frow"><label></label><span class="sub">Every motion event is still recorded and labelled; this only filters notifications. Person/vehicle need object detection (Motion detection card) — without it every event is pushed.</span></div>
       <div class="frow"><label>Motion push cooldown (sec)</label><input id="s_mcool" type="number" min="0" value="${a.motion_push_cooldown}"><span class="sub">0 = push every detected event</span></div>
       <div class="frow"><button class="btn" id="s_save">Save alerts</button><button class="btn" id="s_test">Send test alert</button><span class="saved" id="s_amsg"></span></div>
     </div>
@@ -1678,7 +1681,8 @@ async function renderSettings() {
     notifier: $('#s_notifier').value, ntfy_url: $('#s_ntfy').value, webhook_url: $('#s_webhook').value,
     telegram: { bot_token: $('#s_tg_token').value, chat_id: $('#s_tg_chat').value },
     stale_segment_seconds: +$('#s_stale').value,
-    motion_push: $('#s_mpush').checked, motion_push_cooldown: +$('#s_mcool').value } }, $('#s_amsg'));
+    motion_push: $('#s_mpush').checked, motion_push_cooldown: +$('#s_mcool').value,
+    push_on: $('#s_pushon').value } }, $('#s_amsg'));
   $('#s_test').onclick = async () => {
     const el = $('#s_amsg'); el.textContent = 'sending…'; el.style.color = '';
     try { const j = await post('api/alerts/test', {}); el.textContent = j.delivered ? '✓ sent via ' + j.notifier : 'notifier is "none" — pick & save one first'; }
@@ -1699,6 +1703,8 @@ async function renderSettings() {
       <div class="ctitle">${esc(c.name)}</div>
       <div class="frow"><label>Name</label><input class="c_name" value="${esc(c.name)}"></div>
       <div class="frow"><label>Rotation</label><select class="c_rot">${rotOpts}</select></div>
+      <div class="frow"><label>Push when</label><select class="c_pushon"><option value="">Use global (${esc((PUSH_ON_OPTS.find(o => o[0] === (a.push_on || 'person')) || [, ''])[1])})</option>
+        ${PUSH_ON_OPTS.map(([v, l]) => `<option value="${v}"${v === c.push_on ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="frow"><label>Motion sensitivity</label>
         <input class="c_sens" type="range" min="1" max="20" step="0.5" value="${sensVal}" ${useGlobal ? 'disabled' : ''}>
         <span class="rangeval c_sens_v">${useGlobal ? 'global' : sensVal}</span></div>
@@ -1710,6 +1716,7 @@ async function renderSettings() {
     gl.onchange = () => { sens.disabled = gl.checked; sv.textContent = gl.checked ? 'global' : sens.value; };
     b.querySelector('.c_save').onclick = () => save({ cameras: { [c.id]: {
       name: b.querySelector('.c_name').value, rotation: +b.querySelector('.c_rot').value,
+      push_on: b.querySelector('.c_pushon').value,
       motion_sensitivity: gl.checked ? 0 : +sens.value } } }, b.querySelector('.c_msg'))
       .then(() => { camRot[c.id] = +b.querySelector('.c_rot').value; const cam = camById(c.id); if (cam) cam.name = b.querySelector('.c_name').value; });
     cs.appendChild(b);
