@@ -163,3 +163,25 @@ def test_event_thumb_served_from_disk(tmp_path):
         assert c.get("/api/events/999/thumb").status_code == 404
         # thumbs/ is not mistaken for a camera directory
         assert "thumbs" not in Storage(cfg.storage_dir).cameras_on_disk()
+
+
+def test_long_chain_is_split_at_pauses():
+    """Real shape from 19:26-19:32: steady activity 2-66 s apart chained into one
+    6-minute incident, hiding the 19:30:30 activity that triggered a push."""
+    ev = Ev()
+    offsets = [0, 45, 80, 86, 103, 141, 176, 188, 254, 256, 291, 300, 359]
+    for k, off in enumerate(offsets):
+        ev.add(["cam1", "cam3", "cam2"][k % 3], T0 + off, 30.0)
+    items = inc.build(ev.rows, THR, NAMES)["items"]
+    assert all(i["end"] - i["start"] <= inc.MAX_SPAN for i in items)
+    assert sum(i["n"] for i in items) == len(offsets)
+    pushed = T0 + 254  # the moment the notification was about starts its own card
+    assert any(i["start"] == pushed for i in items)
+
+
+def test_continuous_activity_stays_one_incident():
+    ev = Ev()
+    for k in range(40):  # every 5 s for 200 s: no pause worth splitting at
+        ev.add("cam1", T0 + k * 5, 30.0, "person")
+    items = inc.build(ev.rows, THR, NAMES)["items"]
+    assert len(items) == 1 and items[0]["n"] == 40

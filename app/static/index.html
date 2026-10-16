@@ -110,6 +110,17 @@
   .transport .hint { color:var(--muted); font-size:12px; margin-left:8px; flex:1 1 240px; }
   .transport .time { font-family:var(--mono); font-size:18px; font-weight:500; margin-left:10px; }
   .transport .right { margin-left:auto; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  /* Review progress bar: the current incident ±10 s, else a 5-minute block. */
+  .scrub { flex:1 1 100%; order:10; display:flex; align-items:center; gap:10px; padding:2px 6px 6px; }
+  .scrub .st { font-size:11px; color:var(--dim); flex:none; }
+  .scrub .bar { position:relative; flex:1; height:28px; cursor:pointer; touch-action:none; }
+  .scrub .bar::before { content:''; position:absolute; left:0; right:0; top:12px; height:4px; border-radius:2px; background:#2a303a; }
+  .scrub .incwin { position:absolute; top:8px; height:12px; background:rgba(96,165,250,.14); border-radius:3px; }
+  .scrub .fill { position:absolute; left:0; top:12px; height:4px; border-radius:2px; background:var(--accent); }
+  .scrub .knob { position:absolute; top:7px; width:14px; height:14px; margin-left:-7px; border-radius:50%; background:#fff; box-shadow:0 0 0 3px rgba(96,165,250,.35); }
+  .scrub .ticks span { position:absolute; top:6px; width:2px; height:16px; margin-left:-1px; background:var(--motion); opacity:.8; }
+  .scrub .ticks span.person { background:var(--person); } .scrub .ticks span.vehicle { background:var(--vehicle); }
+  .scrub .lbl { position:absolute; bottom:28px; transform:translateX(-50%); background:var(--head); color:#1a0b0b; font-family:var(--mono); font-size:11px; font-weight:600; padding:1px 6px; border-radius:4px; white-space:nowrap; }
   .syncchip { display:flex; align-items:center; gap:6px; margin-left:10px; padding:5px 10px; border-radius:999px; background:#1d2a1f; color:#86efac; font-size:12px; }
   .syncchip::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--person); }
   .syncchip.wait { background:#2a2414; color:#fde68a; } .syncchip.wait::before { background:var(--vehicle); }
@@ -131,8 +142,9 @@
   .icard.on { border-color:var(--accent); background:#18212e; box-shadow:inset 3px 0 0 var(--accent); }
   .icard.noise { opacity:.72; }
   .icard .row1 { display:flex; align-items:center; gap:8px; width:100%; }
-  .icard .t { font-family:var(--mono); font-size:14px; font-weight:500; }
+  .icard .t { font-family:var(--mono); font-size:14px; font-weight:500; white-space:nowrap; }
   .icard .dur { color:var(--muted); font-size:12px; }
+  .icard .tend { color:var(--muted); font-weight:400; }
   .icard .thumbs { display:flex; gap:4px; margin:8px 0 6px; height:58px; overflow:hidden; }
   .icard .thumbs img { height:58px; width:auto; min-width:32px; border-radius:5px; display:block; background:#0b0d10; }
   .icard .row3 { display:flex; gap:6px; color:var(--muted); font-size:12px; width:100%; }
@@ -390,6 +402,14 @@
             <button class="btn" id="download">Download clip</button>
             <button class="btn keep" id="keep">Keep</button>
           </span>
+          <div class="scrub" id="scrub">
+            <span class="mono st" id="scrub-a"></span>
+            <div class="bar" id="scrub-bar" role="slider" tabindex="0" aria-label="Playback position">
+              <div class="incwin" id="scrub-inc"></div><div class="ticks" id="scrub-ticks"></div>
+              <div class="fill" id="scrub-fill"></div><div class="knob" id="scrub-knob"></div>
+            </div>
+            <span class="mono st" id="scrub-b"></span>
+          </div>
         </div>
       </div>
       <div class="focuspanel hidden" id="focuspanel"></div>
@@ -963,7 +983,7 @@ async function refreshData() {
       api(`api/incidents?start=${ds}&end=${de}&filter=${S.filter}`),
       api(`api/timeline?start=${ds}&end=${de}`)]);
     if (ds !== S.dayStart) return;   // day changed meanwhile
-    S.inc = inc; S.tl = tl; thresholds = inc.thresholds || {};
+    S.inc = inc; S.tl = tl; thresholds = inc.thresholds || {}; scrubWin = null;
   } catch (e) { console.warn('refresh failed', e); }
   renderAll();
   renderWallLatest();
@@ -1001,6 +1021,7 @@ function renderClock() {
   if (isWall) { $('#wtime').textContent = fmtHM(nowS()); $('#wdate').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }); }
   renderPlayhead();
   renderFocusPlayhead();
+  renderScrub();
   if (S.mode === 'review') { const ci = currentIncident(); markPlaying(ci ? ci.id : null); }
 }
 function renderToolbar() {
@@ -1017,6 +1038,54 @@ function renderToolbar() {
   $('#lay-focus').classList.toggle('on', S.layout === 'focus');
   renderClock();
 }
+// ---- review progress bar
+let scrubWin = null, scrubDragT = null;
+function scrubWindow() {
+  const ci = currentIncident();
+  if (ci) return { key: ci.id, a: ci.start - 10, b: ci.end + 10, inc: ci };
+  const blk = 300, a = Math.floor(S.playT / blk) * blk;  // fixed 5-min blocks: the bar doesn't slide
+  return { key: 'blk' + a, a, b: a + blk, inc: null };
+}
+function renderScrub() {
+  if (S.mode !== 'review') return;
+  const w = scrubDragT != null && scrubWin ? scrubWin : scrubWindow();
+  if (!scrubWin || scrubWin.key !== w.key) {
+    scrubWin = w;
+    const f = t => (clamp((t - w.a) / (w.b - w.a), 0, 1) * 100).toFixed(2) + '%';
+    $('#scrub-a').textContent = fmtTime(w.a);
+    $('#scrub-b').textContent = fmtTime(w.b);
+    const inc = $('#scrub-inc');
+    if (w.inc) { inc.style.display = ''; inc.style.left = f(w.inc.start); inc.style.width = `calc(${f(w.inc.end)} - ${f(w.inc.start)})`; }
+    else inc.style.display = 'none';
+    // Event ticks from the timeline data (all cameras) inside the window.
+    const ticks = [];
+    for (const l of (S.tl ? S.tl.cameras : [])) for (const [ts, kind] of l.events)
+      if (ts >= w.a && ts <= w.b) ticks.push(`<span class="${kind}" style="left:${f(ts)}" title="${fmtTime(ts)} · ${esc(l.name)}"></span>`);
+    $('#scrub-ticks').innerHTML = ticks.join('');
+  }
+  const t = scrubDragT ?? S.playT;
+  const pc = (clamp((t - scrubWin.a) / (scrubWin.b - scrubWin.a), 0, 1) * 100).toFixed(2) + '%';
+  $('#scrub-fill').style.width = pc; $('#scrub-knob').style.left = pc;
+  let lbl = $('#scrub-bar .lbl');
+  if (scrubDragT != null) {
+    if (!lbl) { lbl = document.createElement('span'); lbl.className = 'lbl'; $('#scrub-bar').appendChild(lbl); }
+    lbl.style.left = pc; lbl.textContent = fmtTime(scrubDragT);
+  } else if (lbl) lbl.remove();
+  $('#scrub-bar').setAttribute('aria-valuetext', fmtTime(t));
+}
+(function wireScrubBar() {
+  const bar = $('#scrub-bar');
+  let drag = false;
+  const tAt = x => { const r = bar.getBoundingClientRect(); return scrubWin.a + clamp((x - r.left) / r.width, 0, 1) * (scrubWin.b - scrubWin.a); };
+  bar.addEventListener('pointerdown', e => { if (!scrubWin) return; drag = true; bar.setPointerCapture(e.pointerId); scrubDragT = tAt(e.clientX); renderScrub(); });
+  bar.addEventListener('pointermove', e => { if (drag) { scrubDragT = tAt(e.clientX); renderScrub(); } });
+  const end = () => { if (!drag) return; drag = false; const T = scrubDragT; scrubDragT = null; if (T != null) seekAll(T); };
+  bar.addEventListener('pointerup', end);
+  bar.addEventListener('pointercancel', () => { drag = false; scrubDragT = null; renderScrub(); });
+  bar.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); seekAll(S.playT + (e.key === 'ArrowLeft' ? -5 : 5)); }
+  });
+})();
 function renderTransport() {
   const live = S.mode === 'live';
   $('#tp-live').style.display = live ? 'contents' : 'none';
@@ -1059,7 +1128,7 @@ function renderIncidents() {
     const on = cur && cur.id === i.id;
     const thumbs = i.thumbs.slice(0, 3).map(th => lazyImg(thumbUrl(th.event_id), camName(th.camera))).join('');
     parts.push(`<button class="icard${on ? ' on' : ''}${i.likely_noise ? ' noise' : ''}" data-inc="${i.id}">
-      <span class="row1"><span class="t">${fmtTime(i.start)}</span><span class="dur">${fmtDur(i.end - i.start + 1)}</span>
+      <span class="row1"><span class="t">${fmtTime(i.start)}${i.end - i.start >= 1 ? `<span class="tend">–${fmtTime(i.end)}</span>` : ''}</span><span class="dur">${fmtDur(i.end - i.start + 1)}</span>
         <span class="chip playing${on ? '' : ' hidden'}">playing</span>
         ${i.likely_noise ? '<span class="chip noise">probably noise</span>' : ''}${labelChip(i.labels)}</span>
       <span class="thumbs">${thumbs}</span>

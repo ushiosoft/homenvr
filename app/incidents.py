@@ -14,6 +14,8 @@ from __future__ import annotations
 
 GAP = 90.0             # events closer than this (any camera) belong to one incident
 WEAK_FACTOR = 2.0      # unlabeled event with score < WEAK_FACTOR * threshold is "weak"
+MAX_SPAN = 120         # an incident longer than this is split at its largest pauses
+MIN_SPLIT_GAP = 10     # ... but never at a pause shorter than this
 BUSY_CHAIN_GAP = 300   # weak events of one camera this close form a candidate busy run
 BUSY_MIN_EVENTS = 12   # a weak single-camera run this long ...
 BUSY_MIN_SECONDS = 600  # ... over at least this long is folded as a busy period
@@ -40,6 +42,24 @@ def _chains(events: list[dict], gap: float) -> list[list[dict]]:
         else:
             out.append([e])
     return out
+
+
+def split_long(chain: list[dict]) -> list[list[dict]]:
+    """Split a chain longer than MAX_SPAN at its largest internal pause, recursively.
+
+    Gap clustering alone chains steady activity (a car arriving, then someone
+    walking around, then a camera blinking) into one multi-minute incident whose
+    card shows only its start time — a push at 19:31 then lands inside a
+    "19:26" card and looks missing. Splitting at the natural pauses keeps each
+    card short enough that its time range says when things happened.
+    """
+    if len(chain) < 2 or chain[-1]["ts"] - chain[0]["ts"] <= MAX_SPAN:
+        return [chain]
+    gaps = [(chain[i + 1]["ts"] - chain[i]["ts"], i) for i in range(len(chain) - 1)]
+    gap, i = max(gaps)
+    if gap < MIN_SPLIT_GAP:
+        return [chain]  # continuous activity: genuinely one long incident
+    return split_long(chain[:i + 1]) + split_long(chain[i + 1:])
 
 
 def find_busy(events: list[dict], thresholds: dict[str, float]) -> list[list[dict]]:
@@ -111,7 +131,7 @@ def build(events: list[dict], thresholds: dict[str, float], names: dict[str, str
     rest = [e for e in events if e["id"] not in folded]
 
     incidents: list[dict] = []
-    for chain in _chains(rest, GAP):
+    for chain in (part for c in _chains(rest, GAP) for part in split_long(c)):
         s = _summary(chain, names)
         s["kind"] = "incident"
         s["id"] = f"i{chain[0]['id']}"
