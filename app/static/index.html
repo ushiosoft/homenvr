@@ -537,16 +537,19 @@ function tryPlay(video) {
 }
 function attachHls(video, src) {
   video.muted = true;
-  if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = src;
-    video.addEventListener('loadedmetadata', () => tryPlay(video), { once: true });
-    return null;
-  }
+  // Prefer hls.js wherever it runs (MSE): it honours the latency settings below, and
+  // Chromium's built-in HLS player rejects these camera streams once they carry
+  // audio (DEMUXER_ERROR_COULD_NOT_PARSE). Native HLS only where hls.js can't run
+  // (iPhone Safari).
   if (window.Hls && Hls.isSupported()) {
     const h = new Hls({ liveSyncDurationCount: 2, maxLiveSyncPlaybackRate: 1.5 });
     h.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) setTimeout(() => { h.loadSource(src); h.startLoad(); }, 3000); });
     h.on(Hls.Events.MANIFEST_PARSED, () => tryPlay(video));
     h.loadSource(src); h.attachMedia(video); return h;
+  }
+  if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = src;
+    video.addEventListener('loadedmetadata', () => tryPlay(video), { once: true });
   }
   return null;
 }
