@@ -450,6 +450,7 @@ class Supervisor:
         self._motion_push_at: dict[str, float] = {}
         self._motion_pushing: set[str] = set()
         self._thumb_floor: dict[str, float] = {}  # per camera: thumbs before this are swept
+        self._motion_pending: dict[str, tuple] = {}  # per camera: newest event waiting its turn
         self._tasks: list[asyncio.Task] = []
 
     def reload_notifier(self) -> None:
@@ -484,6 +485,11 @@ class Supervisor:
         if not (want_detect or want_thumb or push_now):
             return
         if cam_id in self._motion_pushing:
+            # Busy with this camera's previous event (~6 s incl. waiting for frames).
+            # Keep the newest event and run it next instead of dropping it: on a camera
+            # that fires on shadows every 10-20 s, a person arriving mid-analysis would
+            # otherwise never be looked at.
+            self._motion_pending[cam_id] = (ts, score, eid)
             return
         self._motion_pushing.add(cam_id)
         try:
@@ -509,6 +515,9 @@ class Supervisor:
             log.warning("[%s] motion handling failed: %s", cam_id, redact(str(e)))
         finally:
             self._motion_pushing.discard(cam_id)
+            nxt = self._motion_pending.pop(cam_id, None)
+            if nxt is not None:
+                asyncio.ensure_future(self._motion_alert(cam_id, *nxt))
 
     async def _capture_event(self, cam, ts: float, detect: bool) -> tuple[bytes, list[str]]:
         """The frame that best shows what triggered motion at `ts`, plus labels.

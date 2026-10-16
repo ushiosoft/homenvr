@@ -44,3 +44,33 @@ def test_motion_cmd_uses_sub_stream_and_diff_filter(tmp_path):
     assert "Channels/102" in joined                  # sub stream
     assert "tblend=all_mode=difference" in joined     # frame differencing
     assert "signalstats" in joined and "metadata=print" in joined
+
+
+def test_event_during_analysis_is_queued_not_dropped(tmp_path):
+    """While one event's burst is analysed, the newest following event runs next
+    (intermediate ones coalesce into it) instead of being skipped."""
+    import asyncio
+    from app.recorder import Supervisor
+    from app.storage import Storage
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}],
+                 "motion": {"enabled": True}})
+    sup = Supervisor(cfg, Storage(tmp_path))
+    seen = []
+
+    async def fake_capture(cam, ts, detect):
+        seen.append(ts)
+        await asyncio.sleep(0.05)
+        return b"\xff\xd8x\xff\xd9", []
+    sup._capture_event = fake_capture
+
+    async def run():
+        first = asyncio.create_task(sup._motion_alert("cam1", 100.0, 5.0, 1))
+        await asyncio.sleep(0.01)
+        await sup._motion_alert("cam1", 105.0, 5.0, 2)   # busy -> queued
+        await sup._motion_alert("cam1", 110.0, 5.0, 3)   # replaces the queued one
+        await first
+        for _ in range(20):                              # let the follow-up run
+            await asyncio.sleep(0.02)
+    asyncio.run(run())
+    assert seen == [100.0, 110.0]
+    assert (tmp_path / "thumbs" / "cam1" / "3.jpg").exists()
