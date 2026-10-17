@@ -505,6 +505,10 @@ const ICON_SPK_ON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
 const ICON_SPK_OFF = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5L6 9H3v6h3l5 4V5z"/><path d="M22 9l-6 6M16 9l6 6"/></svg>';
 const isWall = new URLSearchParams(location.search).has('wall');
 const isPhone = () => matchMedia('(max-width:760px)').matches;
+// WebKit (Safari, and every browser on iPhone/iPad) plays MP4 only from responses that
+// support HTTP Range, so review asks the server for real files (file=1) in short
+// windows instead of open-ended streams. CriOS/FxiOS are WebKit too and match.
+const RANGED = /AppleWebKit/.test(navigator.userAgent) && !/Chrome\/|Chromium|Edg\//.test(navigator.userAgent);
 
 // ---------------------------------------------------------------- state
 let cameras = [], camRot = {}, thresholds = {};
@@ -874,7 +878,8 @@ function seekAll(T) {
     const t = tiles[c.id], v = t.video, off = T - t.start;
     let ok = false;
     if ((t.state === 'playing' || t.state === 'buffering' || t.state === 'paused') && off >= 0) {
-      for (let i = 0; i < v.buffered.length; i++) if (off >= v.buffered.start(i) && off <= v.buffered.end(i) - 0.3) ok = true;
+      if (t.ranged) ok = off <= (v.duration || 0) - 0.3;   // a real file: seek anywhere in it
+      else for (let i = 0; i < v.buffered.length; i++) if (off >= v.buffered.start(i) && off <= v.buffered.end(i) - 0.3) ok = true;
     }
     if (ok) { t.target = null; t.ff = false; v.playbackRate = S.speed; v.currentTime = off; } else loadTile(c.id, T);
   }
@@ -918,7 +923,6 @@ async function loadTile(id, T) {
   // Direct play (original 2K, no server transcode): always for H.264 recordings,
   // which every browser plays; for H.265 only where the browser can (useDirect).
   let start = T, direct = $('#quality').value !== 'compat' && !t.forceCompat;
-  const dur = clamp(Math.ceil(cov.until - start) + 2, 5, PLAY_WINDOW);
   if (direct) {
     try {
       const k = await api(`api/cameras/${id}/keyframe?ts=${T}`);
@@ -929,12 +933,16 @@ async function loadTile(id, T) {
       if (direct) { start = k.ts; if (T - k.ts > 0.2) t.target = T; }
     } catch (e) { if (gen !== t.gen) return; direct = false; }
   }
-  t.start = start; t.direct = direct;
+  // Ranged files are cut before the first byte is sent: short windows keep that ~1 s
+  // for a stream copy; transcoding is slower still, so even shorter.
+  const win = RANGED ? (direct ? 60 : 20) : PLAY_WINDOW;
+  const dur = clamp(Math.ceil(cov.until - start) + 2, 5, win);
+  t.start = start; t.direct = direct; t.ranged = RANGED;
   t.height = !direct && tileIsLarge(id) ? 720 : 480;
   v._xf.rot = direct ? (camRot[id] || 0) : 0;
   applyXform(v);
-  v.src = direct ? `api/cameras/${id}/remux.mp4?start=${start.toFixed(3)}&dur=${dur}`
-                 : `api/cameras/${id}/playback.mp4?start=${start.toFixed(3)}&dur=${dur}&height=${t.height}`;
+  v.src = (direct ? `api/cameras/${id}/remux.mp4?start=${start.toFixed(3)}&dur=${dur}`
+                  : `api/cameras/${id}/playback.mp4?start=${start.toFixed(3)}&dur=${dur}&height=${t.height}`) + (RANGED ? '&file=1' : '');
   v.muted = !(S.sound && id === S.selCam);
   v.playbackRate = S.speed;
   // Direct play (stream copy) has to start at the keyframe before T — up to a few
@@ -967,6 +975,7 @@ function reachTarget(id) {
   if (t.target == null || t.ff || !['playing', 'buffering', 'paused'].includes(t.state)) return;
   const gen = t.gen, left = () => t.target - (t.start + v.currentTime);
   if (left() <= 0.04) { finishTarget(id); return; }
+  if (t.ranged) { v.currentTime = t.target - t.start; finishTarget(id); return; }   // a real file seeks
   t.ff = true;
   const rate = clamp(left() / 0.75, 2, 16);
   v.playbackRate = rate;
@@ -1037,7 +1046,8 @@ function onTileError(id) {
   const t = tiles[id];
   if (S.mode !== 'review' || !t.video.getAttribute('src')) return;
   if (t.direct) { t.forceCompat = true; loadTile(id, S.playT); return; }  // retry as compatible (H.264)
-  t.state = 'none'; setOverlay(id, 'No recording at this time'); setBadge(id);
+  // The recording exists (loadTile checked coverage): say playback failed, not "no recording".
+  t.state = 'none'; setOverlay(id, 'Couldn\'t play this recording here'); setBadge(id);
 }
 function masterCam() {
   const ok = id => tiles[id] && ['playing', 'buffering', 'paused'].includes(tiles[id].state);
@@ -1755,15 +1765,28 @@ function savedCard(c) {
 // (with sound) so they work in every browser. Download keeps the original.
 function playSaved(c) {
   const n = encodeURIComponent(c.name);
+  // WebKit can't play the live transcode (no Range): wait for the seekable copy there.
+  const wait = !c.seekable && RANGED;
   const m = document.createElement('div'); m.id = 'modal';
-  m.innerHTML = `<div class="box"><video controls autoplay playsinline src="api/saved/${n}/play.mp4"></video>
-    ${c.seekable ? '' : '<p class="hint">Preparing a seekable copy of this clip — until it\'s ready you can only seek within what has loaded.</p>'}
+  m.innerHTML = `<div class="box"><video controls autoplay playsinline ${wait ? '' : `src="api/saved/${n}/play.mp4"`}></video>
+    ${c.seekable ? '' : `<p class="hint" id="m_prep">${wait ? 'Preparing this clip for playback — a few seconds…' : 'Preparing a seekable copy of this clip — until it\'s ready you can only seek within what has loaded.'}</p>`}
     <div class="mbar"><b style="flex:1;word-break:break-all">${esc(c.name)}</b>
     <a class="btn" href="saved/${n}" download>Download</a><button class="btn" id="m_close">Close</button></div></div>`;
-  const close = () => { const v = m.querySelector('video'); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
+  let poll = null;
+  const close = () => { clearTimeout(poll); const v = m.querySelector('video'); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
   m.onclick = e => { if (e.target === m) close(); };
   m.querySelector('#m_close').onclick = close;
   document.body.appendChild(m);
+  if (wait) {
+    const check = async () => {
+      try {
+        const x = (await api('api/saved')).find(s => s.name === c.name);
+        if (x && x.seekable) { m.querySelector('#m_prep').remove(); const v = m.querySelector('video'); v.src = `api/saved/${n}/play.mp4`; v.play().catch(() => {}); return; }
+      } catch {}
+      if (document.body.contains(m)) poll = setTimeout(check, 2000);
+    };
+    poll = setTimeout(check, 1500);
+  }
 }
 
 // ---------------------------------------------------------------- settings

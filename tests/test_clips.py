@@ -78,3 +78,24 @@ def test_converter_links_h264_and_converts_rotated(tmp_path):
     assert s.saved_bytes() == sum(p.stat().st_size for p in saved.glob("*.mp4")) + b.stat().st_size
     conv.remove(saved / "cam2-20261017-120000.mp4")
     assert conv.ready(saved / "cam2-20261017-120000.mp4") is None
+
+
+def test_ranged_remux_for_webkit(tmp_path):
+    """Safari/iOS only plays MP4 from Range-capable responses: file=1 cuts the window
+    to a real file and answers Range requests with 206 (the stream answers 200)."""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    recording(tmp_path / "rec")
+    cfg = parse({"storage_dir": str(tmp_path / "rec"), "live_dir": str(tmp_path / "live"),
+                 "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    with TestClient(create_app(cfg, run_recorders=False)) as c:
+        q = {"start": BASE + 4, "dur": 10}
+        r = c.get("/api/cameras/cam1/remux.mp4", params={**q, "file": 1}, headers={"Range": "bytes=0-1"})
+        assert r.status_code == 206 and r.headers["content-range"].startswith("bytes 0-1/")
+        total = int(r.headers["content-range"].rsplit("/", 1)[1])
+        r = c.get("/api/cameras/cam1/remux.mp4", params={**q, "file": 1})
+        assert r.status_code == 200 and len(r.content) == total            # same cached file
+        out = tmp_path / "w.mp4"; out.write_bytes(r.content)
+        assert duration(out) == pytest.approx(10, abs=0.3) and first_pts_and_key(out).startswith("K")
+        r = c.get("/api/cameras/cam1/playback.mp4", params={**q, "file": 1, "height": 240}, headers={"Range": "bytes=0-1"})
+        assert r.status_code == 206

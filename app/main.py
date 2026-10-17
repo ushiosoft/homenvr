@@ -260,7 +260,7 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
 
     @app.get("/api/cameras/{cam_id}/playback.mp4")
     async def playback(cam_id: str, start: float = Query(...), dur: float = Query(300),
-                       height: int = Query(720, ge=240, le=1440)):
+                       height: int = Query(720, ge=240, le=1440), file: bool = Query(False)):
         """Transcode a window [start, start+dur) to H.264 and stream it progressively
         (fragmented MP4), so HEVC recordings are playable in any browser. Grid tiles
         ask for a smaller height (480), which roughly halves the CPU cost."""
@@ -272,6 +272,10 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         from .recorder import rotation_vf
         rv = rotation_vf(cam.rotation)
         vf = (rv + "," if rv else "") + f"scale=-2:{height - height % 2}"
+        if file:
+            return await _ranged_ffmpeg(f"pb-{cam_id}-{start:.3f}-{dur:g}-{height}", script, [
+                "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
+                "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k"])
         return await _stream_ffmpeg(script, [
             # Keyframe every ~2 s: fragments (one per keyframe) are small, so the
             # browser can start playing ~2 s of encoded video in, not ~10 s.
@@ -297,7 +301,7 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         return {"ts": seg_start + kf, "codec": codec}
 
     @app.get("/api/cameras/{cam_id}/remux.mp4")
-    async def remux(cam_id: str, start: float = Query(...), dur: float = Query(300)):
+    async def remux(cam_id: str, start: float = Query(...), dur: float = Query(300), file: bool = Query(False)):
         """Direct play: the original 2K stream, stream-copied (no re-encode, ~0 CPU) into
         fragmented MP4. Only for browsers that decode the camera codec (HEVC). Not
         rotated — the client rotates it like live view. Audio (AAC) is copied as-is."""
@@ -309,8 +313,53 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         from .recorder import _video_tag, probe_file_codec
         first = re.search(r"^file '(.+)'$", script, re.M).group(1)
         codec = await probe_file_codec(first)
-        return await _stream_ffmpeg(script, ["-t", str(dur), "-map", "0:v:0", "-c:v", "copy",
-                                             *_video_tag(codec), "-map", "0:a:0?", "-c:a", "copy"])
+        args = ["-t", str(dur), "-map", "0:v:0", "-c:v", "copy", *_video_tag(codec), "-map", "0:a:0?", "-c:a", "copy"]
+        if file:
+            return await _ranged_ffmpeg(f"rx-{cam_id}-{start:.3f}-{dur:g}", script, args)
+        return await _stream_ffmpeg(script, args)
+
+    # ---- ranged playback files (Safari / iOS) ---------------------------------
+    # WebKit plays MP4 only from responses that honour HTTP Range (it probes with
+    # "bytes=0-1" and gives up on a plain 200 stream), so for it the window is cut to
+    # a real file first and served with Range. Built once per window (WebKit asks for
+    # the same URL several times), kept a few minutes, pruned by age and total size.
+    play_cache = Path(tempfile.gettempdir()) / "homenvr-play"
+    play_locks: dict[str, asyncio.Lock] = {}
+
+    def _prune_play_cache(keep_s: float = 600, max_bytes: float = 1.5e9) -> None:
+        if not play_cache.is_dir():
+            return
+        files = sorted((e.stat().st_mtime, e.stat().st_size, Path(e.path)) for e in os.scandir(play_cache)
+                       if e.is_file() and e.name.endswith(".mp4"))
+        total, now = sum(f[1] for f in files), time.time()
+        for mtime, size, p in files:
+            if now - mtime < keep_s and total <= max_bytes:
+                break
+            p.unlink(missing_ok=True)
+            total -= size
+
+    async def _ranged_ffmpeg(key: str, script: str, out_args: list[str]) -> FileResponse:
+        play_cache.mkdir(parents=True, exist_ok=True)
+        out = play_cache / f"{key}.mp4"
+        lock = play_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            if not out.is_file():
+                await asyncio.to_thread(_prune_play_cache)
+                lst = play_cache / f"{key}.ffconcat"
+                lst.write_text(script)
+                part = play_cache / f"{key}.part"
+                proc = await asyncio.create_subprocess_exec(
+                    FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0",
+                    "-f", "concat", "-i", str(lst), *out_args, "-movflags", "+faststart", "-f", "mp4", str(part),
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+                _, err = await proc.communicate()
+                lst.unlink(missing_ok=True)
+                if proc.returncode != 0:
+                    part.unlink(missing_ok=True)
+                    raise HTTPException(500, err.decode(errors="replace")[-300:])
+                part.replace(out)
+        play_locks.pop(key, None)
+        return FileResponse(out, media_type="video/mp4", headers={"Cache-Control": "no-store"})
 
     async def _stream_ffmpeg(script: str, out_args: list[str]) -> StreamingResponse:
         """Run ffmpeg over a concat script and stream its fragmented-MP4 output."""
