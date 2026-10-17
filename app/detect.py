@@ -40,6 +40,9 @@ CATS = ("person", "vehicle", "animal")
 # fraction of the frame (0.05 %: ~115 px at 640x360, a small animal at a distance).
 BLOB_MIN_FRAC = 0.0005
 MAX_BLOBS = 6
+# Animals score lower than people (dogs walking past the driveway: 0.3-0.5), so they
+# have their own threshold; the moving / 2-frame / not-static rules still apply.
+CONF_BY_CAT = {"animal": 0.3}
 
 MODEL_DIR = os.environ.get("HOMENVR_MODEL_DIR", "/models")
 YOLOX_FILE = "yolox_tiny.onnx"
@@ -124,6 +127,9 @@ class ObjectDetector:
             return []
         return self._yolox(img) if self.backend == "yolox" else self._mobilenet(img)
 
+    def _conf(self, cat: str) -> float:
+        return CONF_BY_CAT.get(cat, self.confidence)
+
     def kept_boxes(self, img, zones=None) -> list[tuple[str, float, tuple[int, int, int, int]]]:
         """boxes() minus detections standing in one of the camera's ignore zones."""
         found = self.boxes(img)
@@ -173,8 +179,11 @@ class ObjectDetector:
             scores.append(best)
             counted.append(kept)
         labels = [c for c in CATS if sum(s[c] > 0 for s in scores) >= MIN_FRAMES]
+        # Boxes for unexplained motion use pixels that changed against both neighbours:
+        # where something *is*, not also where it was a second ago (ghost boxes).
+        now_masks = motion_masks(imgs, self._cv2, self._np, both=True)
         blobs = [moving_blobs(mask, self._cv2, self._np, [b for _c, b in kept], zones)
-                 for mask, kept in zip(masks, counted)]
+                 for mask, kept in zip(now_masks, counted)]
         first = next((i for i in imgs if i is not None), None)
         area = first.shape[0] * first.shape[1] if first is not None else None
         kept_blobs = drop_fixtures(blobs, area)
@@ -219,7 +228,8 @@ class ObjectDetector:
         out = []
         for i in range(det.shape[2]):
             conf = float(det[0, 0, i, 2])
-            cat = VOC_CAT.get(VOC[int(det[0, 0, i, 1])]) if conf >= self.confidence else None
+            cat = VOC_CAT.get(VOC[int(det[0, 0, i, 1])])
+            cat = cat if cat and conf >= self._conf(cat) else None
             if cat:
                 x1, y1, x2, y2 = det[0, 0, i, 3:7]
                 out.append((cat, conf, (int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h))))
@@ -248,7 +258,7 @@ class ObjectDetector:
         idx = sorted(COCO_CAT)
         cls = o[:, 4:5] * o[:, [5 + i for i in idx]]    # objectness x class score
         best = cls.max(1)
-        keep = np.where(best >= self.confidence)[0]
+        keep = np.where(best >= min(self.confidence, *CONF_BY_CAT.values()))[0]
         if not len(keep):
             return []
         grid, stride = self._grid
@@ -261,6 +271,8 @@ class ObjectDetector:
             if not np.isfinite((cx, cy, bw, bh)).all():
                 continue
             c = int(cls[k].argmax())
+            if float(cls[k, c]) < self._conf(COCO_CAT[idx[c]]):
+                continue
             out.append((COCO_CAT[idx[c]], float(cls[k, c]),
                         (int((cx - bw / 2) / r), int((cy - bh / 2) / r), int((cx + bw / 2) / r), int((cy + bh / 2) / r))))
         return nms(out, cv2)
@@ -278,9 +290,10 @@ def nms(dets: list, cv2, iou_max: float = 0.45) -> list:
     return sorted(out, key=lambda d: -d[1])
 
 
-def motion_masks(imgs, cv2, np, gap: int = 2):
+def motion_masks(imgs, cv2, np, gap: int = 2, both: bool = False):
     """For each frame, a 0/1 mask of pixels that changed against the frames `gap`
-    before and after it (either side). None where it can't be computed."""
+    before and after it: either side, or with `both` the two sides (at the burst's
+    ends, the one side there is). None where it can't be computed."""
     grey = [cv2.GaussianBlur(cv2.cvtColor(i, cv2.COLOR_BGR2GRAY), (5, 5), 0) if i is not None else None
             for i in imgs]
     masks = []
@@ -288,10 +301,14 @@ def motion_masks(imgs, cv2, np, gap: int = 2):
         if g is None:
             masks.append(None)
             continue
+        sides = [(cv2.absdiff(g, grey[j]) >= DIFF_LEVEL).astype(np.uint8) for j in (k - gap, k + gap)
+                 if 0 <= j < len(grey) and grey[j] is not None and grey[j].shape == g.shape]
         m = np.zeros(g.shape, np.uint8)
-        for j in (k - gap, k + gap):
-            if 0 <= j < len(grey) and grey[j] is not None and grey[j].shape == g.shape:
-                m |= (cv2.absdiff(g, grey[j]) >= DIFF_LEVEL).astype(np.uint8)
+        if both and len(sides) == 2:
+            m = sides[0] & sides[1]
+        else:
+            for d in sides:
+                m |= d
         masks.append(cv2.dilate(m, np.ones((5, 5), np.uint8)) if m.any() or len(grey) > 1 else None)
     return masks
 

@@ -258,3 +258,20 @@ def test_pick_frame_only_considers_the_event_labels():
     sc[3]["animal"], sc[4]["animal"] = 0.5, 0.7
     assert pick_frame([b""] * 6, sc, ["animal"])[0] == 4
     assert pick_frame([b""] * 6, sc)[0] == 1          # without labels: the old order
+
+
+def test_motion_boxes_mark_where_things_are_not_where_they_were():
+    """With the either-side mask a mover left a ghost box at its position a second
+    earlier; the boxes use the both-sides mask."""
+    import cv2
+    import numpy as np
+    from app.detect import motion_masks
+    imgs = []
+    for k in range(6):
+        img = np.full((90, 160, 3), 40, np.uint8)
+        img[30:60, 10 + 20 * k:25 + 20 * k] = 220
+        imgs.append(img)
+    either = motion_masks(imgs, cv2, np)[2]
+    both = motion_masks(imgs, cv2, np, both=True)[2]
+    assert either[45, 15].any()                 # the mover's position at frame 0: a ghost
+    assert not both[45, 15].any() and both[45, 57]   # only where it is at frame 2

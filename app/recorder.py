@@ -183,7 +183,7 @@ async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: f
     camera connection (a fresh RTSP grab contends with the live worker on the
     wireless sub-stream and returns grey frames)."""
     init, segs = _live_segments(live_dir, cam_id)
-    tmp = _concat_tmp(init, segs[-1:])
+    tmp = _concat_tmp(init, segs[-1 - LIVE_LEAD_SEGMENTS:])   # from a keyframe (see live_frames)
     try:
         # The END of the newest finished segment: its first frame is ~2 s older.
         return await _ffmpeg_jpeg(["-sseof", "-0.4", "-i", tmp], width, timeout, rot=rot)
@@ -204,12 +204,18 @@ async def live_frames(live_dir, cam_id: str, since: float, max_segments: int = 3
     recent = [p for p in segs if p.stat().st_mtime >= since][:max_segments] or segs[-1:]
     i = segs.index(recent[0])
     start = segs[i - 1].stat().st_mtime if i > 0 else recent[0].stat().st_mtime - HLS_SEG_SECONDS
-    tmp = _concat_tmp(init, recent)
+    # Pass-through (H.264) live segments needn't start on a keyframe: decode from a few
+    # segments earlier and drop that lead-in, or the burst's first seconds are garbage.
+    lead = segs[max(0, i - LIVE_LEAD_SEGMENTS):i]
+    j = segs.index(lead[0]) if lead else i
+    lead_start = segs[j - 1].stat().st_mtime if j > 0 else (lead[0].stat().st_mtime - HLS_SEG_SECONDS if lead else start)
+    skip = max(0.0, start - lead_start)
+    tmp = _concat_tmp(init, lead + recent)
     rv = rotation_vf(rot)
     vf = f"fps={fps},{rv + ',' if rv else ''}scale={width}:-2"
     try:
         proc = await asyncio.create_subprocess_exec(
-            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", tmp, "-vf", vf,
+            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", tmp, "-ss", f"{skip:.2f}", "-vf", vf,
             "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "-",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
@@ -339,6 +345,44 @@ async def keyframe_before(path, offset: float) -> tuple[float, str | None]:
     return best, await probe_file_codec(str(path))
 
 
+# The event's burst window on the recording, around the trigger time.
+BURST_BEFORE, BURST_AFTER = 5.5, 3.5
+REFINE_AFTER = 14.0   # seconds after the trigger: by then the recording holds the window
+
+
+async def recording_frames(storage: Storage, cam: Camera, start: float, end: float, fps: float = 2,
+                           width: int = 640, timeout: float = 60) -> list[bytes]:
+    """JPEG frames (fps per second) of the recording from exactly `start` to `end`, rotated
+    like the camera: the same frames, at the same times, as review playback shows."""
+    path, offset = await asyncio.to_thread(storage.segment_at, cam.id, start)
+    if not path:
+        return []
+    kf, _codec = await keyframe_before(path, offset)
+    k = start - offset + kf            # decode from the keyframe, then drop the lead-in
+    script = storage.concat_list(cam.id, k, end)
+    if script.count("\nfile ") == 0:
+        return []
+    import tempfile
+    fd, lst = tempfile.mkstemp(suffix=".ffconcat")
+    with os.fdopen(fd, "w") as f:
+        f.write(script)
+    rv = rotation_vf(cam.rotation)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0", "-f", "concat", "-i", lst,
+            "-ss", f"{start - k:.3f}", "-t", f"{end - start:.3f}",
+            "-vf", f"fps={fps},{rv + ',' if rv else ''}scale={width}:-2", "-q:v", "4",
+            "-f", "image2pipe", "-c:v", "mjpeg", "-", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+        except asyncio.TimeoutError:
+            proc.kill(); await proc.wait()
+            return []
+    finally:
+        os.unlink(lst)
+    return split_jpegs(out)
+
+
 def save_thumb(path: Path, img: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
@@ -382,8 +426,9 @@ def record_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]
 # Live HLS segment length, also the forced-keyframe interval. 1 s keeps the live
 # picture ~2-3 s behind (the player sits 2 segments back from the newest).
 HLS_SEG_SECONDS = 1
-HLS_LIST_SIZE = 14   # playlist window (s at 1 s/segment): covers the ~10 s burst below
+HLS_LIST_SIZE = 20   # playlist window (s at 1 s/segment): the ~10 s burst below + its keyframe lead-in
 CAPTURE_AFTER = 4.5  # seconds after a motion trigger to wait before picking its frame
+LIVE_LEAD_SEGMENTS = 4  # extra live segments decoded first so decoding starts at a keyframe
 
 
 def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path, url: str | None = None) -> list[str]:
@@ -524,6 +569,8 @@ class Supervisor:
         # Per camera: places that flicker in place every burst (the clock overlay), as
         # [0-1 box, bursts seen] — boxes there aren't shown (ObjectDetector.analyze).
         self._fixtures: dict[str, list] = {}
+        self._refine_sem = asyncio.Semaphore(1)   # one recording re-analysis at a time
+        self._refining: set[asyncio.Task] = set()
         self.converter = None  # clips.ClipConverter, set by the app: auto-saved clips get a seekable copy
         self.autosaver = None  # clips.AutoSaver, set in start()
         self._tasks: list[asyncio.Task] = []
@@ -574,6 +621,10 @@ class Supervisor:
             img, labels, boxes = await self._capture_event(cam, ts, want_detect)
             if boxes and eid is not None and self.events is not None:
                 await asyncio.to_thread(self.events.set_boxes, eid, boxes)
+            if want_detect and eid is not None and self.events is not None:
+                task = asyncio.ensure_future(self._refine_from_recording(cam, eid, ts))
+                self._refining.add(task)
+                task.add_done_callback(self._refining.discard)
             if boxes:
                 from .detect import draw_boxes
                 shown = boxes["f"][boxes["pick"]]
@@ -638,6 +689,35 @@ class Supervisor:
         self._remember_fixtures(cam.id, found)
         i, _ = pick_frame(frames, scores, labels)
         return frames[i], labels, {"t0": round(t0, 2), "dt": 0.5, "pick": i, "f": boxes}
+
+    async def _refine_from_recording(self, cam, eid: int, ts: float) -> None:
+        """Re-analyse the event on the recording once it's there, and keep that result.
+
+        The push goes out from the live burst (fast), but live frames are a poorer
+        source: their times are estimated from segment file times (seconds off from
+        the recording the review player shows), and pass-through segments can decode
+        badly. The recording gives clean frames on exactly the review timeline, so its
+        boxes line up with playback and its labels and thumbnail replace the live ones.
+        """
+        await asyncio.sleep(max(0.0, ts + REFINE_AFTER - time.time()))
+        try:
+            async with self._refine_sem:
+                a, b = ts - BURST_BEFORE, ts + BURST_AFTER
+                frames = await recording_frames(self.storage, cam, a, b)
+                if len(frames) < 6:
+                    return
+                known = [f[0] for f in self._fixtures.get(cam.id, []) if f[1] >= 2]
+                scores, labels, boxes, found = await asyncio.to_thread(self.detector.analyze, frames, cam.zones, known)
+                self._remember_fixtures(cam.id, found)
+                i, _ = pick_frame(frames, scores, labels)
+                await asyncio.to_thread(self.events.set_boxes, eid,
+                                        {"t0": round(a, 2), "dt": 0.5, "pick": i, "f": boxes, "src": "rec"})
+                await asyncio.to_thread(self.events.set_label, eid, ",".join(labels))
+                from .detect import draw_boxes
+                img = await asyncio.to_thread(draw_boxes, frames[i], boxes[i])
+                await asyncio.to_thread(save_thumb, self.storage.thumb_path(cam.id, eid), img)
+        except Exception as e:  # noqa: BLE001 - the live result stays
+            log.debug("[%s] recording re-analysis of event %s failed: %s", cam.id, eid, e)
 
     def _remember_fixtures(self, cam_id: str, found: list) -> None:
         from .detect import iou

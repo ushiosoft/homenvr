@@ -284,11 +284,24 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         from .recorder import rotation_vf
         rv = rotation_vf(cam.rotation)
         vf = (rv + "," if rv else "") + f"scale=-2:{height - height % 2}"
+        # Decode from the keyframe before `start` and drop the lead-in: a concat inpoint
+        # alone starts the output at that keyframe (seconds early, labelled as `start`).
+        from .recorder import keyframe_before
+        path, offset = await asyncio.to_thread(storage.segment_at, cam_id, start)
+        skip = 0.0
+        if path:
+            try:
+                kf, _c = await keyframe_before(path, offset)
+                skip = offset - kf
+                script = storage.concat_list(cam_id, start - skip, start + dur)
+            except Exception:  # noqa: BLE001 - keyframe-aligned start is still playable
+                skip = 0.0
+        exact = ["-ss", f"{skip:.3f}"] if skip > 0.01 else []
         if file:
             return await _ranged_ffmpeg(f"pb-{cam_id}-{start:.3f}-{dur:g}-{height}", script, [
-                "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
+                *exact, "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k"])
-        return await _stream_ffmpeg(script, [
+        return await _stream_ffmpeg(script, [*exact,
             # Keyframe every ~2 s: fragments (one per keyframe) are small, so the
             # browser can start playing ~2 s of encoded video in, not ~10 s.
             "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",

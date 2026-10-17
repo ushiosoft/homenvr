@@ -99,3 +99,26 @@ def test_ranged_remux_for_webkit(tmp_path):
         assert duration(out) == pytest.approx(10, abs=0.3) and first_pts_and_key(out).startswith("K")
         r = c.get("/api/cameras/cam1/playback.mp4", params={**q, "file": 1, "height": 240}, headers={"Range": "bytes=0-1"})
         assert r.status_code == 206
+
+
+def test_transcoded_playback_starts_exactly(tmp_path):
+    """Regression: the transcode started at the keyframe before `start` (up to a GOP
+    early) while the client labelled it `start`."""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    recording(tmp_path / "rec")                       # keyframes every 2 s
+    cfg = parse({"storage_dir": str(tmp_path / "rec"), "live_dir": str(tmp_path / "live"),
+                 "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    with TestClient(create_app(cfg, run_recorders=False)) as c:
+        r = c.get("/api/cameras/cam1/playback.mp4", params={"start": BASE + 5.0, "dur": 3, "height": 240, "file": 1})
+        out = tmp_path / "p.mp4"; out.write_bytes(r.content)
+        assert duration(out) == pytest.approx(3.0, abs=0.15)   # was 4 s (from the keyframe at 4 s)
+
+
+def test_recording_frames_cover_exactly_the_window(tmp_path):
+    from app.recorder import recording_frames
+    recording(tmp_path)
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    frames = asyncio.run(recording_frames(Storage(tmp_path), cfg.cameras[0], BASE + 5.0, BASE + 9.0))
+    assert len(frames) == 8 and all(f[:2] == b"\xff\xd8" for f in frames)
+    assert asyncio.run(recording_frames(Storage(tmp_path), cfg.cameras[0], BASE + 100, BASE + 104)) == []

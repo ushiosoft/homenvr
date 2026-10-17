@@ -435,7 +435,7 @@
           <span class="syncchip" id="syncchip"></span>
           <span class="right">
             <label class="chk" title="After an incident ends, jump over long stretches with no motion to the next one"><input type="checkbox" id="skipgaps">Skip quiet gaps</label>
-            <label class="sel-lbl">Speed <select id="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+            <label class="sel-lbl">Speed <select id="speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
             <label class="sel-lbl">Quality <select id="quality"><option value="auto">Auto</option><option value="direct">2K direct</option><option value="compat">Compatible</option></select></label>
             <button class="btn soundbtn"></button>
             <button class="btn boxbtn" id="boxbtn" aria-pressed="true" title="Outline what triggered each event: people, vehicles, animals, and other movement (dashed)">Boxes</button>
@@ -1889,6 +1889,9 @@ function savedCard(g) {
 function playSaved(c, group = [c]) {
   const m = document.createElement('div'); m.id = 'modal';
   m.innerHTML = `<div class="box"><video controls autoplay playsinline></video><p class="hint" id="m_prep"></p>
+    <div class="mbar pbctl"><button class="btn" id="m_back" title="Back 10 seconds">−10 s</button>
+      <label class="sel-lbl">Speed <select id="m_speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
+      <button class="btn" id="m_fwd" title="Forward 10 seconds">+10 s</button></div>
     <div class="mbar"><span class="camtabs">${group.length > 1 ? group.map((x, i) => `<button class="btn" data-i="${i}">${esc(camName(clipCam(x)))}</button>`).join('') : `<b>${esc(camName(clipCam(c)))}</b>`}</span>
     <span style="flex:1"></span><a class="btn" id="m_dl" download>Download</a><button class="btn" id="m_close">Close</button></div></div>`;
   const v = m.querySelector('video'), prep = m.querySelector('#m_prep');
@@ -1910,6 +1913,11 @@ function playSaved(c, group = [c]) {
     poll = setTimeout(check, 1500);
   };
   m.querySelectorAll('.camtabs .btn').forEach(b => b.onclick = () => show(group[+b.dataset.i], v.currentTime || 0));
+  const speed = m.querySelector('#m_speed');
+  speed.onchange = () => { v.playbackRate = +speed.value; };
+  v.addEventListener('loadedmetadata', () => { v.playbackRate = +speed.value; });   // keeps it across camera switches
+  m.querySelector('#m_back').onclick = () => { v.currentTime = Math.max(0, v.currentTime - 10); };
+  m.querySelector('#m_fwd').onclick = () => { v.currentTime = Math.min(v.duration || 1e9, v.currentTime + 10); };
   const close = () => { clearTimeout(poll); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
   m.onclick = e => { if (e.target === m) close(); };
   m.querySelector('#m_close').onclick = close;
