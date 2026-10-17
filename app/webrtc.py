@@ -71,6 +71,9 @@ class Go2rtc:
         # The source we registered per camera. go2rtc reports a stream's producer URL
         # without the "ffmpeg:" prefix and "#video=..." options, so it can't tell us.
         self._registered: dict[str, str] = {}
+        # Cameras whose stream was just (re)created: go2rtc keeps the preload *entry*
+        # when a stream is deleted, but its connection dies, so it must be redone.
+        self._repreload: set[str] = set()
 
     def _call(self, method: str, path: str, timeout: float = 5) -> None:
         """go2rtc API write. go2rtc applies the change, then tries to save it to its
@@ -112,6 +115,7 @@ class Go2rtc:
             if self._registered.get(cam.id):
                 log.info("[%s] camera codec changed; re-registering its go2rtc stream", cam.id)
         self._call("PUT", "/api/streams?" + urllib.parse.urlencode({"name": cam.id, "src": want}))
+        self._repreload.add(cam.id)
         if cam.id not in self._streams():
             raise RuntimeError(f"go2rtc did not create stream {cam.id}")
         self._registered[cam.id] = want
@@ -121,9 +125,12 @@ class Go2rtc:
     def ensure_preload(self, cam: Camera) -> None:
         """Keep the camera's stream running with no viewer, so live view starts at once."""
         with urllib.request.urlopen(f"{self.base}/api/preload", timeout=5) as r:
-            if cam.id in (json.load(r) or {}):
-                return
+            listed = cam.id in (json.load(r) or {})
+        if listed and cam.id not in self._repreload:
+            return
         q = urllib.parse.urlencode({"src": cam.id})
+        if listed:  # stale entry from before the stream was re-created
+            self._call("DELETE", f"/api/preload?{q}")
         try:  # go2rtc waits for the stream to start before answering, and (like streams)
             # tries to save to its read-only config; both are fine — verified below.
             urllib.request.urlopen(urllib.request.Request(f"{self.base}/api/preload?{q}", method="PUT"), timeout=20)
@@ -132,6 +139,7 @@ class Go2rtc:
         with urllib.request.urlopen(f"{self.base}/api/preload", timeout=5) as r:
             if cam.id not in (json.load(r) or {}):
                 raise RuntimeError(f"go2rtc did not preload {cam.id}")
+        self._repreload.discard(cam.id)
         log.info("[%s] webrtc stream preloaded", cam.id)
 
     async def register_all(self, timeout: float = 45) -> None:
