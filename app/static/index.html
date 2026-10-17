@@ -335,6 +335,8 @@
     .camgrid .tile:not(.sel) .side { display:none !important; }
     .camgrid .tile:not(.sel) .name { top:auto; bottom:4px; left:4px; font-size:11px; padding:2px 6px; }
     .transport { justify-content:space-between; padding:4px; }
+    /* Reviewing: the player stays pinned at the top while the incidents below scroll. */
+    body.reviewing .gridcol { position:sticky; top:0; z-index:20; background:var(--bg); margin:-12px -12px 0; padding:12px 12px 8px; box-shadow:0 6px 12px -8px rgba(0,0,0,.8); }
     .transport .hint, .transport .syncchip, .transport .time { display:none; }
     .transport .right { margin-left:0; width:100%; justify-content:center; }
     aside.incidents { max-height:none; min-width:0; flex-basis:100%; }
@@ -695,7 +697,8 @@ function buildGrid() {
     v.addEventListener('playing', () => onTilePlaying(c.id));
     v.addEventListener('ended', () => onTileEnded(c.id));
     v.addEventListener('error', () => onTileError(c.id));
-    v.addEventListener('loadeddata', () => { if (S.mode === 'review' && S.paused && t.state === 'loading') { t.state = 'paused'; setOverlay(c.id, ''); } });
+    v.addEventListener('loadeddata', () => { if (S.mode === 'review' && S.paused && t.state === 'loading') { t.state = 'paused'; setOverlay(c.id, ''); reachTarget(c.id); } });
+    v.addEventListener('progress', () => reachTarget(c.id));
     v.addEventListener('waiting', () => { if (S.mode === 'review' && t.state === 'playing') t.state = 'buffering'; });
     g.appendChild(el);
   }
@@ -861,7 +864,7 @@ function seekAll(T) {
     if ((t.state === 'playing' || t.state === 'buffering' || t.state === 'paused') && off >= 0) {
       for (let i = 0; i < v.buffered.length; i++) if (off >= v.buffered.start(i) && off <= v.buffered.end(i) - 0.3) ok = true;
     }
-    if (ok) v.currentTime = off; else loadTile(c.id, T);
+    if (ok) { t.target = null; v.currentTime = off; } else loadTile(c.id, T);
   }
   if (dayOf(T) !== S.dayStart) { S.dayStart = dayOf(T); refreshData(); }
   ensureHalfWindow();
@@ -890,6 +893,7 @@ function hevcSupported() {
 }
 async function loadTile(id, T) {
   const t = tiles[id], v = t.video, gen = (t.gen = (t.gen || 0) + 1);
+  t.target = null;
   t.reloads.push(Date.now()); t.reloads = t.reloads.filter(x => Date.now() - x < 10000);
   if (t.pc || v.srcObject) stopLive(t);  // srcObject would override src
   const cov = covered(id, T);
@@ -901,7 +905,7 @@ async function loadTile(id, T) {
   setOverlay(id, '<span class="spin"></span>Loading recording…');
   // Direct play (original 2K, no server transcode): always for H.264 recordings,
   // which every browser plays; for H.265 only where the browser can (useDirect).
-  let start = Math.floor(T), direct = $('#quality').value !== 'compat' && !t.forceCompat;
+  let start = T, direct = $('#quality').value !== 'compat' && !t.forceCompat;
   const dur = clamp(Math.ceil(cov.until - start) + 2, 5, PLAY_WINDOW);
   if (direct) {
     try {
@@ -910,7 +914,7 @@ async function loadTile(id, T) {
       t.codec = k.codec;
       if (k.codec === 'hevc') direct = useDirect();
       else if (k.codec !== 'h264') direct = false;
-      if (direct) start = k.ts;
+      if (direct) { start = k.ts; if (T - k.ts > 0.2) t.target = T; }
     } catch (e) { if (gen !== t.gen) return; direct = false; }
   }
   t.start = start; t.direct = direct;
@@ -918,11 +922,12 @@ async function loadTile(id, T) {
   v._xf.rot = direct ? (camRot[id] || 0) : 0;
   applyXform(v);
   v.src = direct ? `api/cameras/${id}/remux.mp4?start=${start.toFixed(3)}&dur=${dur}`
-                 : `api/cameras/${id}/playback.mp4?start=${start}&dur=${dur}&height=${t.height}`;
+                 : `api/cameras/${id}/playback.mp4?start=${start.toFixed(3)}&dur=${dur}&height=${t.height}`;
   v.muted = !(S.sound && id === S.selCam);
   v.playbackRate = S.speed;
-  // Direct play starts at the keyframe just before T (t.start is exact, so the clock
-  // stays right); the stream isn't seekable, so we don't skip ahead to T.
+  // Direct play (stream copy) has to start at the keyframe before T — up to a few
+  // seconds early. t.target makes the tile skip ahead to T as soon as that part has
+  // arrived (copied streams arrive much faster than real time); see reachTarget.
   if (!S.paused) v.play().catch(() => {});
   setBadge(id);
 }
@@ -937,7 +942,16 @@ function canSeekTo(t, T) {
 function tileTime(id) {
   const t = tiles[id];
   if (!t || !['playing', 'buffering', 'paused'].includes(t.state)) return null;
+  if (t.target != null) return t.target;   // still on the lead-in before the asked-for time
   return t.start + t.video.currentTime;
+}
+// Skip a direct-play tile from its keyframe lead-in to the exact time asked for.
+function reachTarget(id) {
+  const t = tiles[id];
+  if (t.target == null || !['playing', 'buffering', 'paused'].includes(t.state)) return;
+  if (t.start + t.video.currentTime >= t.target - 0.1) t.target = null;
+  else if (canSeekTo(t, t.target)) { t.video.currentTime = t.target - t.start; t.target = null; }
+  if (t.target == null) setOverlay(id, '');
 }
 function onTilePlaying(id) {
   const t = tiles[id];
@@ -947,7 +961,9 @@ function onTilePlaying(id) {
     const sec = (performance.now() - t.loadAt) / 1000;
     t.loadSec = t.loadSec ? (t.loadSec + sec) / 2 : sec;   // smoothed, per camera
   }
-  t.state = 'playing'; setOverlay(id, '');
+  t.state = 'playing';
+  reachTarget(id);
+  if (t.target == null) setOverlay(id, '');
   t.video.playbackRate = S.speed;
   if (t.direct && t.codec === 'hevc' && !t.checked) {
     // Some browsers report HEVC support but render black frames: check once, fall back.
@@ -1012,6 +1028,7 @@ function syncTick() {
       continue;
     }
     if (t.state === 'loading') continue;
+    reachTarget(c.id);
     withFootage++;
     if (S.paused) { if (!v.paused) v.pause(); t.state = 'paused'; inSync++; continue; }
     if (v.paused && t.state !== 'buffering') v.play().catch(() => {});
@@ -1065,12 +1082,21 @@ function currentIncident() {
   if (S.mode !== 'review') return null;
   return incidentAt(S.playT) || realIncidents().find(i => i.id === S.selInc) || null;
 }
+// After picking something to watch from a list below the player, bring the player
+// into view if most of it is scrolled away (phones pin it while reviewing instead).
+function showPlayer() {
+  if (isWall || isPhone()) return;
+  const r = $('#grid').getBoundingClientRect();
+  const visible = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
+  if (visible < r.height * 0.6) $('.gridcol').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
 function playIncident(i) {
   S.selInc = i.id;
   if (i.cameras && i.cameras.length && !isPhone()) S.selCam = i.cameras[0];
   if (isPhone() && i.cameras && i.cameras.length) S.selCam = i.cameras[0];
   layoutGrid();
   if (S.mode === 'review') seekAll(i.start - LEAD); else reviewAt(i.start - LEAD, { inc: i.id });
+  showPlayer();
 }
 const thumbUrl = eid => `api/events/${eid}/thumb`;
 const camThumb = (cam, ts) => `api/cameras/${cam}/thumb?ts=${Math.round(ts / 10) * 10}`;
@@ -1126,6 +1152,7 @@ function renderClock() {
 }
 function renderToolbar() {
   const live = S.mode === 'live';
+  document.body.classList.toggle('reviewing', !live);
   $('#livepill').classList.toggle('hidden', !live);
   $('#revpill').classList.toggle('hidden', live);
   $('#golive').classList.toggle('hidden', live);
@@ -1289,7 +1316,7 @@ function wireBusy(root) {
     });
     const rng = card.querySelector('.tuner input');
     if (rng) rng.oninput = () => { card.querySelector('.tuner .rangeval').textContent = rng.value; };
-    card.querySelectorAll('.bursts button').forEach(x => x.onclick = () => { S.selCam = b.camera; layoutGrid(); reviewAt(+x.dataset.t - LEAD); });
+    card.querySelectorAll('.bursts button').forEach(x => x.onclick = () => { S.selCam = b.camera; layoutGrid(); reviewAt(+x.dataset.t - LEAD); showPlayer(); });
   });
 }
 
@@ -1473,7 +1500,7 @@ function renderFocus() {
       <div class="seq">${seq}</div></section>`;
   const mt = $('#minitl');
   mt.onclick = e => { const r = mt.getBoundingClientRect(); seekAll(w0 + clamp((e.clientX - r.left) / r.width, 0, 1) * (w1 - w0)); };
-  fp.querySelectorAll('.seqcard').forEach(b => b.onclick = () => { S.selCam = b.dataset.cam; layoutGrid(); seekAll(+b.dataset.t - 2); });
+  fp.querySelectorAll('.seqcard').forEach(b => b.onclick = () => { S.selCam = b.dataset.cam; layoutGrid(); seekAll(+b.dataset.t - 2); showPlayer(); });
   const sorted = realIncidents().sort((a, b) => a.start - b.start);
   if ($('#fp-prev')) $('#fp-prev').onclick = () => { const i = sorted[idx - 1]; if (i) playIncident(i); };
   if ($('#fp-next')) $('#fp-next').onclick = () => { const i = sorted[idx + 1]; if (i) playIncident(i); };
@@ -1677,6 +1704,7 @@ function playSaved(c) {
   const n = encodeURIComponent(c.name);
   const m = document.createElement('div'); m.id = 'modal';
   m.innerHTML = `<div class="box"><video controls autoplay playsinline src="api/saved/${n}/play.mp4"></video>
+    ${c.seekable ? '' : '<p class="hint">Preparing a seekable copy of this clip — until it\'s ready you can only seek within what has loaded.</p>'}
     <div class="mbar"><b style="flex:1;word-break:break-all">${esc(c.name)}</b>
     <a class="btn" href="saved/${n}" download>Download</a><button class="btn" id="m_close">Close</button></div></div>`;
   const close = () => { const v = m.querySelector('video'); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
@@ -1707,6 +1735,8 @@ async function renderSettings() {
       <div class="frow"><label>Push motion snapshots</label><input id="s_mpush" type="checkbox" ${a.motion_push ? 'checked' : ''}><span class="sub">send a photo notification when motion is detected</span></div>
       <div class="frow"><label>Push when</label><select id="s_pushon">${PUSH_ON_OPTS.map(([v, l]) => `<option value="${v}"${v === (a.push_on || 'person') ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="frow"><label></label><span class="sub">Every motion event is still recorded and labelled; this only filters notifications. Person/vehicle need object detection (Motion detection card) — without it every event is pushed.</span></div>
+      <div class="frow"><label>Public address</label><input id="s_puburl" value="${esc(a.public_url || '')}" placeholder="https://homenvr.your-tailnet.ts.net"></div>
+      <div class="frow"><label></label><span class="sub">Where this page is reachable from your phone. Motion pushes then link to the event: tapping one opens it here, at that time and camera.</span></div>
       <div class="frow"><label>Motion push cooldown (sec)</label><input id="s_mcool" type="number" min="0" value="${a.motion_push_cooldown}"><span class="sub">0 = push every detected event</span></div>
       <div class="frow"><button class="btn" id="s_save">Save alerts</button><button class="btn" id="s_test">Send test alert</button><span class="saved" id="s_amsg"></span></div>
     </div>
@@ -1750,7 +1780,7 @@ async function renderSettings() {
     telegram: { bot_token: $('#s_tg_token').value, chat_id: $('#s_tg_chat').value },
     stale_segment_seconds: +$('#s_stale').value,
     motion_push: $('#s_mpush').checked, motion_push_cooldown: +$('#s_mcool').value,
-    push_on: $('#s_pushon').value } }, $('#s_amsg'));
+    push_on: $('#s_pushon').value, public_url: $('#s_puburl').value.trim() } }, $('#s_amsg'));
   $('#s_test').onclick = async () => {
     const el = $('#s_amsg'); el.textContent = 'sending…'; el.style.color = '';
     try { const j = await post('api/alerts/test', {}); el.textContent = j.delivered ? '✓ sent via ' + j.notifier : 'notifier is "none" — pick & save one first'; }
@@ -1807,6 +1837,15 @@ function tab(name) {
   if (name === 'saved') renderSaved();
   if (name === 'settings') renderSettings();
 }
+// ?play=<unix time>&cam=<id> (the link in motion pushes): open review there. The query
+// is dropped from the address bar so a reload goes back to live.
+function openDeepLink() {
+  const q = new URLSearchParams(location.search), T = +q.get('play');
+  if (isWall || !q.has('play') || !(T > 0)) return;
+  history.replaceState(null, '', location.pathname + location.hash);
+  if (camById(q.get('cam'))) { S.selCam = q.get('cam'); layoutGrid(); applyAudio(); }
+  reviewAt(T - LEAD);
+}
 const tabFromHash = () => (['saved', 'settings'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'cameras');
 window.addEventListener('hashchange', () => tab(tabFromHash()));
 
@@ -1818,6 +1857,7 @@ window.addEventListener('hashchange', () => tab(tabFromHash()));
     buildGrid();
     applyAudio();
     tab(isWall ? 'cameras' : tabFromHash());
+    openDeepLink();
     const l = $('#loading'); l.classList.add('gone'); setTimeout(() => l.classList.add('hidden'), 400);
     refreshData();
   } catch (e) {

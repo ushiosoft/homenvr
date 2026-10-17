@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -34,6 +35,7 @@ SCHEMA = {
         "motion_push": ("bool", None),
         "motion_push_cooldown": ("int", (10, 86400)),
         "push_on": ("enum", PUSH_ON),
+        "public_url": ("url", None),
     },
     "motion": {
         "sensitivity": ("float", (0.1, 255.0)),
@@ -65,6 +67,11 @@ def _coerce(kind, bounds, value):
         return bool(value)
     if kind == "str":
         return str(value)[:64]
+    if kind == "url":
+        v = str(value or "").strip().rstrip("/")
+        if v and not re.fullmatch(r"https?://[^\s/?#]+(/[^\s?#]*)?", v):
+            raise ValueError("must be an http(s):// address")
+        return v[:200]
     if kind == "enum_int":
         v = int(value)
         if v not in bounds:
@@ -134,6 +141,7 @@ def current(cfg: Config) -> dict:
             "motion_push": a.motion_push,
             "motion_push_cooldown": a.motion_push_cooldown,
             "push_on": a.push_on,
+            "public_url": a.public_url,
         },
         "motion": {"enabled": m.enabled, "sensitivity": m.sensitivity,
                    "min_gap_seconds": m.min_gap_seconds, "detect": m.detect},

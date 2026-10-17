@@ -93,6 +93,7 @@ def test_send_image_multipart_and_ntfy():
             cap['ct'] = self.headers.get('Content-Type')
             cap['ua'] = self.headers.get('User-Agent')
             cap['title'] = self.headers.get('Title')
+            cap['click'] = self.headers.get('Click')
             self.send_response(204); self.end_headers()
         def log_message(self, *a): pass
     srv = HTTPServer(("127.0.0.1", 0), H); port = srv.server_address[1]
@@ -107,4 +108,9 @@ def test_send_image_multipart_and_ntfy():
     WebhookNotifier(f"http://127.0.0.1:{port}/wh")  # reset not needed
     NtfyNotifier(f"http://127.0.0.1:{port}/topic").send_image("Motion", "cam1", img, "s.jpg")
     assert cap['body'] == img and cap['title'] == "Motion"  # ntfy sends raw image body
+    assert cap['click'] is None
+    NtfyNotifier(f"http://127.0.0.1:{port}/topic").send_image("Motion", "cam1", img, "s.jpg", "https://h/?play=1&cam=cam1")
+    assert cap['click'] == "https://h/?play=1&cam=cam1"   # tapping the push opens the event
+    WebhookNotifier(f"http://127.0.0.1:{port}/wh").send_image("Motion", "cam1", img, "s.jpg", "https://h/?play=1&cam=cam1")
+    assert b"cam1\\nhttps://h/?play=1&cam=cam1" in cap['body']
     srv.shutdown()

@@ -229,7 +229,12 @@ class Storage:
         d = self.root / SAVED_DIR
         if not d.is_dir():
             return 0
-        return sum(e.stat().st_size for e in os.scandir(d) if e.is_file())
+        total = sum(e.stat().st_size for e in os.scandir(d) if e.is_file())
+        play = d / ".play"  # seekable copies (see app/clips.py); hard links cost nothing
+        if play.is_dir():
+            total += sum(st.st_size for st in (e.stat() for e in os.scandir(play) if e.is_file())
+                         if st.st_nlink == 1)
+        return total
 
     def _bytes(self, segs: list[Segment]) -> int:
         return sum(s.size for s in segs)

@@ -89,6 +89,9 @@ class Alerts:
     # Which motion events are pushed: "person" (default), "person_vehicle", or
     # "motion" (every event). Needs object detection; without it, every event is.
     push_on: str = "person"
+    # Address the UI is reachable at from a phone (e.g. https://homenvr.<tailnet>.ts.net);
+    # motion pushes then link to the event. "" = no link.
+    public_url: str = ""
 
 
 @dataclass
@@ -203,6 +206,7 @@ def parse(raw: dict) -> Config:
             motion_push=bool(a.get("motion_push", False)),
             motion_push_cooldown=int(a.get("motion_push_cooldown", 0)),
             push_on=str(a.get("push_on", "person")),
+            public_url=str(a.get("public_url", "") or ""),
         ),
         motion=Motion(
             enabled=bool(m.get("enabled", False)),

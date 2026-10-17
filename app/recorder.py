@@ -559,11 +559,12 @@ class Supervisor:
                 log.debug("[%s] not pushed (push_on=%s, labels=%s)", cam_id, policy, labels or "none")
             elif push_now:
                 self._motion_push_at[cam_id] = ts
-                from .alerts import make_notifier
+                from .alerts import make_notifier, review_link
                 when = time.strftime("%H:%M:%S", time.localtime(ts))
                 what = " + ".join(labels).title() if labels else "Motion"
                 await asyncio.to_thread(make_notifier(a).send_image, f"{what} — {cam.name}",
-                                        f"Detected at {when}", img, f"{cam_id}-{int(ts)}.jpg")
+                                        f"Detected at {when}", img, f"{cam_id}-{int(ts)}.jpg",
+                                        review_link(a.public_url, cam_id, ts))
                 log.info("[%s] motion push sent (%s)", cam_id, what)
         except Exception as e:
             log.warning("[%s] motion handling failed: %s", cam_id, redact(str(e)))

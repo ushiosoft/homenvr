@@ -40,6 +40,8 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
 
     from .webrtc import Go2rtc
     go2rtc = Go2rtc(cfg)
+    from .clips import ClipConverter, ClipError, build_clip
+    converter = ClipConverter(cfg, storage)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -49,11 +51,13 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
                 # Before the workers: live view + motion read go2rtc's restreams.
                 await go2rtc.register_all()
             await sup.start()
+            converter.start()
             if go2rtc.enabled:
                 warm = asyncio.create_task(go2rtc.keep_warm())
         yield
         if warm:
             warm.cancel()
+        await converter.stop()
         await sup.stop()
 
     app = FastAPI(title="homenvr", lifespan=lifespan)
@@ -334,29 +338,19 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         # Starlette's FileResponse handles Range requests, so the browser can seek.
         return FileResponse(p, media_type="video/mp4", headers={"Cache-Control": "no-cache"})
 
-    async def _build_clip(cam_id: str, start: float, end: float, out: Path, lst: Path) -> None:
+    async def _build_clip(cam_id: str, start: float, end: float, out: Path) -> None:
         """Stream-copy the [start,end) range (active + grace) into `out`. Raises HTTPException."""
-        if end <= start or end - start > MAX_EXPORT_SECONDS:
-            raise HTTPException(400, f"range must be 0-{MAX_EXPORT_SECONDS}s")
-        script = storage.concat_list(cam_id, start, end)
-        if script.count("\nfile ") == 0:
-            raise HTTPException(404, "no recordings in range")
-        lst.write_text(script)
-        proc = await asyncio.create_subprocess_exec(
-            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0", "-f", "concat",
-            "-i", str(lst), "-map", "0", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", str(out),
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, err = await proc.communicate()
-        if proc.returncode != 0 or not out.exists():
-            raise HTTPException(500, err.decode(errors="replace")[-500:])
+        try:
+            await build_clip(storage, cam_id, start, end, out, MAX_EXPORT_SECONDS)
+        except ClipError as e:
+            raise HTTPException(e.status, str(e))
 
     @app.get("/api/cameras/{cam_id}/export")
     async def export(cam_id: str, start: float = Query(...), end: float = Query(...)):
         camera_or_404(cam_id)
         tmpdir = Path(tempfile.mkdtemp(prefix="export-"))
         try:
-            await _build_clip(cam_id, start, end, tmpdir / "clip.mp4", tmpdir / "list.ffconcat")
+            await _build_clip(cam_id, start, end, tmpdir / "clip.mp4")
         except HTTPException:
             _rmtree(tmpdir); raise
         fname = f"{cam_id}-{time.strftime('%Y%m%d-%H%M%S', time.localtime(start))}.mp4"
@@ -373,15 +367,14 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         fname = f"{cam_id}-{stamp}{('-' + label) if label else ''}.mp4"
         saved = storage.saved_dir() / fname
         part = saved.with_suffix(".part")      # build in saved/ so the rename stays on one filesystem
-        tmpdir = Path(tempfile.mkdtemp(prefix="save-"))
         try:
-            await _build_clip(cam_id, start, end, part, tmpdir / "list.ffconcat")
+            await _build_clip(cam_id, start, end, part)
             part.replace(saved)                 # atomic within saved/
         except BaseException:
             part.unlink(missing_ok=True)
             raise
-        finally:
-            _rmtree(tmpdir)
+        converter.remove(saved)                 # a re-save under the same name
+        converter.enqueue(saved)
         try:
             await _saved_thumb(saved)
         except Exception as e:  # the clip is saved; a missing thumbnail is regenerated on view
@@ -404,7 +397,8 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         d = storage.saved_dir()
         import os as _os
         out = [{"name": e.name, "size": e.stat().st_size, "ctime": e.stat().st_mtime,
-                "url": f"saved/{e.name}"} for e in _os.scandir(d) if e.is_file() and e.name.endswith(".mp4")]
+                "url": f"saved/{e.name}", "seekable": converter.ready(Path(e.path)) is not None}
+               for e in _os.scandir(d) if e.is_file() and e.name.endswith(".mp4")]
         out.sort(key=lambda x: x["ctime"], reverse=True)
         return out
 
@@ -434,11 +428,16 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
 
     @app.get("/api/saved/{name}/play.mp4")
     async def saved_play(name: str, height: int = Query(720, ge=240, le=1440)):
-        """A saved clip transcoded to H.264 (rotated), for browsers that can't play the
-        original HEVC file. Download still gives the untouched original."""
+        """A saved clip as H.264 (rotated) for the page's player: the seekable copy
+        (served with Range) once it exists, else a live transcode meanwhile. Download
+        still gives the untouched original."""
         p = _safe_saved(name)
         if not p:
             raise HTTPException(404)
+        ready = converter.ready(p)
+        if ready:
+            return FileResponse(ready, media_type="video/mp4")
+        converter.enqueue(p)
         from .recorder import rotation_vf
         cam = cfg.camera(name.split("-", 1)[0])
         rv = rotation_vf(cam.rotation if cam else 0)
@@ -455,6 +454,7 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
             raise HTTPException(404)
         p.unlink()
         p.with_suffix(".jpg").unlink(missing_ok=True)
+        converter.remove(p)
         return {"deleted": name}
 
     usage_cache: dict = {"t": 0.0, "val": None, "task": None}

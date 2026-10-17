@@ -50,9 +50,11 @@ class Notifier:
     def send(self, title: str, message: str, *, failing: bool) -> None:
         raise NotImplementedError
 
-    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg") -> None:
-        """Send with an image attachment. Default: fall back to text-only."""
-        self.send(title, message, failing=False)
+    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg",
+                   link: str = "") -> None:
+        """Send with an image attachment (and an optional link to open on tap).
+        Default: fall back to text-only."""
+        self.send(title, with_link(message, link), failing=False)
 
 
 class NullNotifier(Notifier):
@@ -71,10 +73,13 @@ class NtfyNotifier(Notifier):
             "Title": title, "Priority": "high" if failing else "default",
             "Tags": "rotating_light" if failing else "white_check_mark"})
 
-    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg") -> None:
-        # ntfy: raw image body with Title/Message/Filename headers.
-        _post(self.url, image, {"Title": title, "Message": message,
-                                "Filename": filename, "Content-Type": "image/jpeg"})
+    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg",
+                   link: str = "") -> None:
+        # ntfy: raw image body with Title/Message/Filename headers; Click opens the link.
+        headers = {"Title": title, "Message": message, "Filename": filename, "Content-Type": "image/jpeg"}
+        if link:
+            headers["Click"] = link
+        _post(self.url, image, headers)
 
 
 class WebhookNotifier(Notifier):
@@ -89,9 +94,10 @@ class WebhookNotifier(Notifier):
                            "content": f"{icon} **{title}**\n{message}"}).encode()
         _post(self.url, body, {"Content-Type": "application/json"})
 
-    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg") -> None:
+    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg",
+                   link: str = "") -> None:
         # Discord webhook: multipart with payload_json + file attachment.
-        payload = json.dumps({"content": f"📸 **{title}**\n{message}"})
+        payload = json.dumps({"content": f"📸 **{title}**\n{with_link(message, link)}"})
         body, ctype = _multipart({"payload_json": payload},
                                  {"files[0]": (filename, image, "image/jpeg")})
         _post(self.url, body, {"Content-Type": ctype})
@@ -109,9 +115,10 @@ class TelegramNotifier(Notifier):
         _post(f"https://api.telegram.org/bot{self.token}/sendMessage",
               data, {"Content-Type": "application/json"})
 
-    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg") -> None:
+    def send_image(self, title: str, message: str, image: bytes, filename: str = "snapshot.jpg",
+                   link: str = "") -> None:
         # Telegram sendPhoto: multipart with photo file + caption.
-        body, ctype = _multipart({"chat_id": self.chat_id, "caption": f"📸 {title}\n{message}"},
+        body, ctype = _multipart({"chat_id": self.chat_id, "caption": f"📸 {title}\n{with_link(message, link)}"},
                                  {"photo": (filename, image, "image/jpeg")})
         _post(f"https://api.telegram.org/bot{self.token}/sendPhoto", body, {"Content-Type": ctype})
 
@@ -133,6 +140,17 @@ class SmtpNotifier(Notifier):
             if self.s.get("user"):
                 srv.login(self.s["user"], self.s.get("password", ""))
             srv.send_message(msg)
+
+
+def with_link(message: str, link: str) -> str:
+    return f"{message}\n{link}" if link else message
+
+
+def review_link(public_url: str, cam_id: str, ts: float) -> str:
+    """Deep link that opens the page reviewing `cam_id` at `ts` ("" without a public address)."""
+    if not public_url:
+        return ""
+    return f"{public_url.rstrip('/')}/?play={int(ts)}&cam={cam_id}"
 
 
 def make_notifier(a: Alerts) -> Notifier:

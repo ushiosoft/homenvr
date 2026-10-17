@@ -104,3 +104,18 @@ def test_push_on_setting(tmp_path):
     import pytest
     with pytest.raises(ValueError):
         s.update(cfg, tmp_path / "settings.json", {"alerts": {"push_on": "cats"}})
+
+
+def test_public_url_setting_and_review_link(tmp_path):
+    from app.alerts import review_link, with_link
+    cfg = mkcfg(tmp_path)
+    s.update(cfg, tmp_path / "settings.json", {"alerts": {"public_url": " https://homenvr.x.ts.net/ "}})
+    assert cfg.alerts.public_url == "https://homenvr.x.ts.net"
+    assert s.current(cfg)["alerts"]["public_url"] == "https://homenvr.x.ts.net"
+    assert review_link(cfg.alerts.public_url, "cam2", 1760000000.7) == "https://homenvr.x.ts.net/?play=1760000000&cam=cam2"
+    assert review_link("", "cam2", 1) == "" and with_link("Detected", "") == "Detected"
+    for bad in ("javascript:alert(1)", "homenvr.local", "https://a b"):
+        with pytest.raises(ValueError):
+            s.update(cfg, tmp_path / "settings.json", {"alerts": {"public_url": bad}})
+    s.update(cfg, tmp_path / "settings.json", {"alerts": {"public_url": ""}})   # clearing is allowed
+    assert cfg.alerts.public_url == ""
