@@ -24,6 +24,10 @@ services:
     hostname: homenvr
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:-}
+      # Pin the tailnet name (and pass it on every start): without it, a hostname set
+      # with `tailscale set --hostname` makes the container's `tailscale up` refuse to
+      # start ("requires mentioning all non-default flags").
+      TS_HOSTNAME: homenvr
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "true"
       TS_SERVE_CONFIG: /config/ts-serve.json
