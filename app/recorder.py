@@ -345,9 +345,11 @@ async def keyframe_before(path, offset: float) -> tuple[float, str | None]:
     return best, await probe_file_codec(str(path))
 
 
-# The event's burst window on the recording, around the trigger time.
-BURST_BEFORE, BURST_AFTER = 5.5, 3.5
-REFINE_AFTER = 14.0   # seconds after the trigger: by then the recording holds the window
+# The event's window on the recording, around the trigger time. Longer than the live
+# burst (no push waits for it): people and animals often stay in view well after the
+# trigger, and the recording's timeline can run a few seconds from the live clock.
+BURST_BEFORE, BURST_AFTER = 6.0, 10.0
+REFINE_AFTER = 20.0   # seconds after the trigger: by then the recording holds the window
 
 
 async def recording_frames(storage: Storage, cam: Camera, start: float, end: float, fps: float = 2,
