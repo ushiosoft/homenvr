@@ -168,7 +168,8 @@ class ObjectDetector:
         labels = [c for c in CATS if sum(s[c] > 0 for s in scores) >= MIN_FRAMES]
         blobs = [moving_blobs(mask, self._cv2, self._np, [b for _c, b in kept], zones)
                  for mask, kept in zip(masks, counted)]
-        blobs = drop_fixtures(blobs)
+        first = next((i for i in imgs if i is not None), None)
+        blobs = drop_fixtures(blobs, first.shape[0] * first.shape[1] if first is not None else None)
         boxes = []
         for img, kept, fblobs in zip(imgs, counted, blobs):
             if img is None:
@@ -303,13 +304,18 @@ def moving_blobs(mask, cv2, np, explained, zones=None) -> list[tuple[int, int, i
     return out
 
 
-FIXTURE_FRAC = 0.8  # a moving area at the same place in this share of the frames is a fixture
+# A moving area at the same place in this share of the burst's frames is a fixture;
+# small ones (the clock's digits: under FIXTURE_SMALL of the frame) already at half.
+FIXTURE_FRAC = 0.8
+FIXTURE_FRAC_SMALL = 0.5
+FIXTURE_SMALL = 0.005
 
 
-def drop_fixtures(blobs: list[list]) -> list[list]:
-    """Remove moving areas that sit at the same place in nearly every frame of the
-    burst: the camera's own clock overlay (its digits change every second) and similar
-    flicker. A passing animal or person moves on, so it never qualifies."""
+def drop_fixtures(blobs: list[list], frame_area: float | None = None) -> list[list]:
+    """Remove moving areas that sit at the same place in much of the burst: the
+    camera's own clock overlay (its seconds change every second, but a small change
+    doesn't always make a big enough area, so it shows in ~60-70 % of frames) and
+    similar flicker. A passing animal or person moves on, so it never qualifies."""
     n = len(blobs)
     if n < 4:
         return blobs
@@ -318,7 +324,8 @@ def drop_fixtures(blobs: list[list]) -> list[list]:
         keep = []
         for b in fb:
             same = sum(any(iou(b, o) >= 0.5 for o in other) for j, other in enumerate(blobs) if j != k)
-            if same < FIXTURE_FRAC * (n - 1):
+            small = frame_area and (b[2] - b[0]) * (b[3] - b[1]) < FIXTURE_SMALL * frame_area
+            if same < (FIXTURE_FRAC_SMALL if small else FIXTURE_FRAC) * (n - 1):
                 keep.append(b)
         out.append(keep)
     return out

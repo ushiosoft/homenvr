@@ -176,6 +176,12 @@ def test_fixed_flicker_is_not_motion():
     out = drop_fixtures(blobs)
     assert all(clock not in fb for fb in out)
     assert out[3] == [(30, 100, 42, 112)] and out[5] == [(50, 100, 62, 112)]
+    # A small fixture showing in only ~2/3 of the frames (the clock's digits) goes too;
+    # a large area at the same place that often (swaying foliage) is kept.
+    leaf = (0, 0, 100, 80)
+    blobs = [([clock] if k % 3 else []) + ([leaf] if k % 3 else []) for k in range(12)]
+    out = drop_fixtures(blobs, frame_area=640 * 360)
+    assert all(clock not in fb for fb in out) and sum(leaf in fb for fb in out) == 8
 
 
 def test_nms_one_box_per_object():
