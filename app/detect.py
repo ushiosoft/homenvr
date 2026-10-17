@@ -58,7 +58,10 @@ MIN_FRAMES = 2
 # detections flicker on and off, so "present in most frames" doesn't catch it
 # either. Not applied to people: someone standing at the door should still count.
 # Validated on 443 events: Backyard false vehicles 63 -> 0, people 55/56 kept.
-STATIC_CATS = {"vehicle"}
+# Animals too: the first day of animal labels on Backyard were all fixtures with
+# shadows moving over them (the covered BBQ, the stair railing); an animal that
+# matters moves across the picture.
+STATIC_CATS = {"vehicle", "animal"}
 STATIC_IOU = 0.7
 
 
