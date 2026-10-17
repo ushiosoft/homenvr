@@ -61,7 +61,7 @@
   .revpill .lbl, .revpill .day { color:var(--muted); }
   .revpill .mono { font-weight:500; }
   .filters { display:flex; gap:6px; flex-wrap:wrap; }
-  .filters button { height:40px; padding:0 14px; border-radius:999px; cursor:pointer; background:var(--panel2); border:1px solid var(--line2); color:var(--muted); }
+  .filters button { white-space:nowrap; height:40px; padding:0 14px; border-radius:999px; cursor:pointer; background:var(--panel2); border:1px solid var(--line2); color:var(--muted); }
   .filters button.on { background:#1c2635; border-color:var(--accent); color:var(--fg); }
   .filters .n { font-family:var(--mono); font-size:12px; opacity:.75; margin-left:6px; }
   .seg { display:flex; background:var(--panel2); border:1px solid var(--line2); border-radius:8px; padding:4px; gap:4px; }
@@ -94,6 +94,9 @@
   .tile .badge { position:absolute; right:10px; top:10px; padding:4px 9px; border-radius:6px; font-size:11px; font-weight:600; font-family:var(--mono); z-index:2; background:rgba(10,12,15,.72); pointer-events:none; }
   .tile .badge.live { background:var(--live); color:#fff; }
   .tile .over { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; gap:10px; z-index:1; color:#c7cdd6; font-size:13px; background:rgba(0,0,0,.45); pointer-events:none; text-align:center; padding:12px; }
+  .transport.fsbar { position:absolute; left:16px; right:16px; bottom:16px; z-index:5; background:rgba(15,17,21,.86); backdrop-filter:blur(4px); }
+  .transport.fsbar .hint { display:none; }
+  .tile.isfs .ctls { top:52px; bottom:auto; opacity:1; }
   .tile .ctls { position:absolute; right:8px; bottom:8px; display:flex; gap:4px; z-index:3; opacity:0; transition:opacity .15s; }
   .tile:hover .ctls, .tile:focus-within .ctls { opacity:1; }
   .tile .side { display:none; }
@@ -266,11 +269,15 @@
   .rangehint { display:flex; justify-content:space-between; color:var(--muted); font-size:11px; margin:-2px 0 6px 180px; }
   .btn.on { border-color:var(--accent); background:#1c2635; color:#bfdbfe; }
   .iconbtn.snd.on { background:var(--accent); color:var(--accent-ink); }
-  .tile .sndbadge { position:absolute; left:10px; bottom:10px; z-index:2; background:var(--accent); color:var(--accent-ink); border-radius:6px; padding:3px 6px; display:none; pointer-events:none; }
-  .tile.audible .sndbadge { display:flex; }
-  .savedgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+  .savedgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:12px; }
+  .camtabs { display:flex; gap:6px; flex-wrap:wrap; }
   .scard.clip { margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column; max-width:none; }
+  .clip .thumbs { display:grid; gap:2px; background:#000; }
+  .clip .thumbs.n2 { grid-template-columns:1fr 1fr; } .clip .thumbs.n3 { grid-template-columns:1fr 1fr 1fr; }
   .clip .thumb { position:relative; border:0; padding:0; background:#000; cursor:pointer; display:block; aspect-ratio:16/9; }
+  .clip .thumbs.n2 .thumb, .clip .thumbs.n3 .thumb { aspect-ratio:3/4; }
+  .clip .thumb .cam { position:absolute; left:6px; bottom:6px; font-size:11px; padding:2px 6px; border-radius:4px; background:rgba(10,12,15,.75); color:#e2e8f0; }
+  .clip .thumbs.n2 .play, .clip .thumbs.n3 .play { width:36px; height:36px; }
   .clip .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
   .clip .thumb .play { position:absolute; inset:0; margin:auto; width:52px; height:52px; border-radius:50%; background:rgba(10,12,15,.7); color:#fff; display:flex; align-items:center; justify-content:center; }
   .clip .meta { padding:10px 12px 12px; display:flex; flex-direction:column; gap:8px; }
@@ -290,6 +297,8 @@
   .zone { fill:rgba(248,113,113,.32); stroke:#f87171; stroke-width:2px; vector-effect:non-scaling-stroke; }
   .zcur { fill:rgba(96,165,250,.18); stroke:#60a5fa; stroke-width:2px; vector-effect:non-scaling-stroke; stroke-dasharray:6 4; }
   .zpt { fill:#60a5fa; } .zpt.first { fill:#fff; }
+  .keepbox { width:min(92vw,420px); }
+  .keepcams { display:flex; flex-direction:column; gap:8px; margin:6px 0 12px; }
   .cfgtext { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:12px/1.5 var(--mono); max-height:420px; overflow:auto; white-space:pre; margin:10px 0; }
   .envtable { display:grid; grid-template-columns:max-content 1fr; gap:2px 16px; font-size:12px; margin-top:8px; }
   .envtable .k { color:var(--muted); }
@@ -362,6 +371,11 @@
     body.reviewing.scrolled .transport .right { display:none; }
     .transport .hint, .transport .syncchip, .transport .time { display:none; }
     .transport .right { margin-left:0; width:100%; justify-content:center; }
+    /* Live: the four buttons as an even 2 x 2 grid. */
+    #tp-live.pgrid { display:grid !important; grid-template-columns:1fr 1fr; gap:8px; width:100%; }
+    #tp-live.pgrid .right { display:contents; }
+    #tp-live.pgrid .btn { width:100%; justify-content:center; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    #tp-live.pgrid .btn span { overflow:hidden; text-overflow:ellipsis; }
     aside.incidents { max-height:none; min-width:0; flex-basis:100%; }
     section.timeline { padding:8px 10px 6px; }
     .legend, .tl-hint, #zoomcap { display:none; }
@@ -679,6 +693,7 @@ const FS_EXIT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" str
 const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement || null;
 function toggleFullscreen(wrap, video) {
   if (fsElement()) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+  if (wrap.dataset.cam && wrap.dataset.cam !== S.selCam) selectCam(wrap.dataset.cam);
   if (wrap.requestFullscreen) wrap.requestFullscreen().catch(() => {});
   else if (wrap.webkitRequestFullscreen) wrap.webkitRequestFullscreen();
   else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();  // iPhone: native player with its own Done
@@ -692,8 +707,17 @@ function syncFullscreenButtons() {
     b.setAttribute('aria-label', b.title);
   });
 }
-document.addEventListener('fullscreenchange', syncFullscreenButtons);
-document.addEventListener('webkitfullscreenchange', syncFullscreenButtons);
+// A fullscreen tile takes the transport (play/pause, progress bar, ...) with it, as an
+// overlay along its bottom; it goes back under the grid on exit.
+function syncFullscreenControls() {
+  const fs = fsElement(), tp = $('#transport');
+  document.querySelectorAll('.tile.isfs').forEach(t => t.classList.remove('isfs'));
+  if (fs && fs.classList.contains('tile')) { fs.classList.add('isfs'); fs.appendChild(tp); tp.classList.add('fsbar'); }
+  else if (tp.classList.contains('fsbar')) { tp.classList.remove('fsbar'); $('#grid').after(tp); }
+  scrubWin = null; renderClock();
+}
+document.addEventListener('fullscreenchange', () => { syncFullscreenButtons(); syncFullscreenControls(); });
+document.addEventListener('webkitfullscreenchange', () => { syncFullscreenButtons(); syncFullscreenControls(); });
 
 // ---------------------------------------------------------------- grid
 function buildGrid() {
@@ -703,14 +727,13 @@ function buildGrid() {
     el.className = 'tile'; el.dataset.cam = c.id;
     el.innerHTML = `<video muted playsinline></video><svg class="boxes" aria-hidden="true"></svg>
       <span class="name"></span><span class="badge"></span>
-      <div class="over hidden"></div><span class="sndbadge">${ICON_SPK_ON}</span>
+      <div class="over hidden"></div>
       <div class="side"></div>
       <div class="ctls">
         <button class="iconbtn snd" title="Sound" aria-label="Sound"></button>
         <button class="iconbtn snap" title="Snapshot" aria-label="Snapshot">▣</button>
         <button class="iconbtn zin" title="Zoom in" aria-label="Zoom in">+</button>
         <button class="iconbtn zout" title="Zoom out" aria-label="Zoom out">−</button>
-        <button class="iconbtn rot" title="Rotate" aria-label="Rotate">⟳</button>
         <button class="iconbtn fs" title="Fullscreen" aria-label="Fullscreen">${FS_ENTER}</button>
       </div>`;
     el.querySelector('.name').textContent = c.name;
@@ -720,7 +743,6 @@ function buildGrid() {
     onTap(el.querySelector('.snd'), () => toggleSound(c.id));
     onTap(el.querySelector('.zin'), () => zoomStep(v, 1));
     onTap(el.querySelector('.zout'), () => zoomStep(v, -1));
-    onTap(el.querySelector('.rot'), () => rotateCam(c.id));
     onTap(el.querySelector('.fs'), () => toggleFullscreen(el, v));
     v.addEventListener('dblclick', () => toggleFullscreen(el, v));
     el.addEventListener('click', e => { if (!e.target.closest('.ctls') && S.selCam !== c.id) selectCam(c.id); });
@@ -764,14 +786,6 @@ function selectCam(id) {
   applyAudio();
   renderLanesSel();
   renderTransportLabels();
-}
-async function rotateCam(id) {
-  await setRot(id, ((camRot[id] || 0) + 90) % 360);
-  const t = tiles[id];
-  t.video._xf.zoom = 1; t.video._xf.px = 0; t.video._xf.py = 0;
-  layoutGrid();
-  if (S.mode === 'review' && !t.direct) loadTile(id, tileTime(id) || S.playT);  // server-rotated stream
-  else { t.video._xf.rot = camRot[id]; applyXform(t.video); }
 }
 function setOverlay(id, html) {
   const o = tiles[id].el.querySelector('.over');
@@ -869,7 +883,7 @@ async function attachRtc(c) {
 }
 // Enter review (or move within it) at time T: every camera plays its recording from T.
 function reviewAt(T, opts = {}) {
-  lastInside = null;  // a jump starts fresh: skip-gaps only reacts to playing past an incident
+  lastInside = null; S.stopAt = null;  // a jump starts fresh: skip-gaps only reacts to playing past an incident
   if (T > nowS() - LIVE_EDGE) { goLive(); return; }
   const wasLive = S.mode === 'live';
   S.mode = 'review'; S.playT = T; S.paused = false;
@@ -885,7 +899,7 @@ function reviewAt(T, opts = {}) {
 }
 // Seek every camera; reuse what's already buffered (instant ±10 s), reload the rest.
 function seekAll(T) {
-  lastInside = null;  // a jump starts fresh: skip-gaps only reacts to playing past an incident
+  lastInside = null; S.stopAt = null;  // a jump starts fresh: skip-gaps only reacts to playing past an incident
   if (S.mode !== 'review') return reviewAt(T);
   if (T > nowS() - LIVE_EDGE) return goLive();
   S.playT = T;
@@ -1174,6 +1188,11 @@ function syncTick() {
     }
   }
   if (cur) lastInside = cur;
+  if (S.stopAt && !S.paused && S.playT >= S.stopAt) {
+    S.stopAt = null;
+    $('#pp').click();
+    toast('End of incident — press ▶ to keep watching.');
+  }
   const chip = $('#syncchip');
   const loading = cameras.filter(c => tiles[c.id].state === 'loading').length;
   if (loading) { chip.className = 'syncchip wait'; chip.textContent = `loading ${loading} camera${loading > 1 ? 's' : ''}…`; }
@@ -1207,12 +1226,13 @@ function showPlayer() {
   const visible = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
   if (visible < r.height * 0.6) $('.gridcol').scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
+const INC_TAIL = 10;   // an incident picked to watch pauses this long after its last event
 function playIncident(i) {
   S.selInc = i.id;
-  if (i.cameras && i.cameras.length && !isPhone()) S.selCam = i.cameras[0];
-  if (isPhone() && i.cameras && i.cameras.length) S.selCam = i.cameras[0];
-  layoutGrid();
+  if (i.cameras && i.cameras.length) selectCam(i.cameras[0]);   // also moves sound + labels
   if (S.mode === 'review') seekAll(i.start - LEAD); else reviewAt(i.start - LEAD, { inc: i.id });
+  // Watching an incident ends with it (Skip quiet gaps keeps going to the next one).
+  S.stopAt = $('#skipgaps').checked ? null : i.end + INC_TAIL;
   showPlayer();
 }
 const thumbUrl = eid => `api/events/${eid}/thumb`;
@@ -1333,6 +1353,7 @@ function renderScrub() {
 function renderTransport() {
   const live = S.mode === 'live';
   $('#tp-live').style.display = live ? 'contents' : 'none';
+  $('#tp-live').classList.toggle('pgrid', isPhone());
   $('#tp-rev').style.display = live ? 'none' : 'contents';
   $('#pp').innerHTML = S.paused ? ICON_PLAY : ICON_PAUSE;
   $('#pp').setAttribute('aria-label', S.paused ? 'Play' : 'Pause');
@@ -1434,7 +1455,7 @@ function wireBusy(root) {
     });
     const rng = card.querySelector('.tuner input');
     if (rng) rng.oninput = () => { card.querySelector('.tuner .rangeval').textContent = rng.value; };
-    card.querySelectorAll('.bursts button').forEach(x => x.onclick = () => { S.selCam = b.camera; layoutGrid(); reviewAt(+x.dataset.t - LEAD); showPlayer(); });
+    card.querySelectorAll('.bursts button').forEach(x => x.onclick = () => { selectCam(b.camera); reviewAt(+x.dataset.t - LEAD); showPlayer(); });
   });
 }
 
@@ -1618,7 +1639,7 @@ function renderFocus() {
       <div class="seq">${seq}</div></section>`;
   const mt = $('#minitl');
   mt.onclick = e => { const r = mt.getBoundingClientRect(); seekAll(w0 + clamp((e.clientX - r.left) / r.width, 0, 1) * (w1 - w0)); };
-  fp.querySelectorAll('.seqcard').forEach(b => b.onclick = () => { S.selCam = b.dataset.cam; layoutGrid(); seekAll(+b.dataset.t - 2); showPlayer(); });
+  fp.querySelectorAll('.seqcard').forEach(b => b.onclick = () => { selectCam(b.dataset.cam); seekAll(+b.dataset.t - 2); showPlayer(); });
   const sorted = realIncidents().sort((a, b) => a.start - b.start);
   if ($('#fp-prev')) $('#fp-prev').onclick = () => { const i = sorted[idx - 1]; if (i) playIncident(i); };
   if ($('#fp-next')) $('#fp-next').onclick = () => { const i = sorted[idx + 1]; if (i) playIncident(i); };
@@ -1687,18 +1708,31 @@ $('#download').onclick = () => {
   const [a, b] = clipRange();
   location.href = `api/cameras/${S.selCam}/export?start=${a}&end=${b}`;
 };
-$('#keep').onclick = async () => {
+$('#keep').onclick = () => {
   const [a, b, ci] = clipRange();
-  const cams = ci ? ci.cameras : [S.selCam];
-  const name = prompt(`Name this saved clip (optional) — keeps ${cams.map(camName).join(', ')}:`, ci && ci.labels.length ? ci.labels.join('-') : '');
-  if (name === null) return;
-  const btn = $('#keep'); btn.disabled = true; btn.textContent = 'Saving…';
-  try {
-    for (const c of cams) await post(`api/cameras/${c}/save`, { start: a, end: b, name });
-    toast(`Saved ${cams.length} clip${cams.length > 1 ? 's' : ''} — find them under Saved.`);
-    loadCameras();
-  } catch (e) { toast('Save failed: ' + e.message); }
-  finally { btn.disabled = false; renderTransportLabels(); }
+  const saw = ci ? ci.cameras : [];
+  const m = document.createElement('div'); m.id = 'modal';
+  m.innerHTML = `<div class="box keepbox"><h3 style="margin:0 0 4px">Keep ${ci ? 'incident' : 'clip'}</h3>
+    <p class="hint">${fmtDay(a)} · ${fmtTime(a)} – ${fmtTime(b)} (${fmtDur(b - a)}) · saved permanently under Saved</p>
+    <div class="keepcams">${cameras.map(c => `<label class="chk"><input type="checkbox" value="${c.id}" ${(saw.length ? saw.includes(c.id) : c.id === S.selCam) ? 'checked' : ''}>
+      ${esc(c.name)}${saw.includes(c.id) ? ` <span class="sub">· ${ci.counts[c.id]} event${ci.counts[c.id] > 1 ? 's' : ''}</span>` : ''}</label>`).join('')}</div>
+    <div class="frow"><label>Name</label><input id="k_name" placeholder="optional, e.g. delivery" value="${esc(ci && ci.labels.length ? ci.labels.join('-') : '')}"></div>
+    <div class="mbar"><span class="sub" id="k_msg" style="flex:1"></span><button class="btn" id="k_cancel">Cancel</button><button class="btn keep" id="k_save">Keep</button></div></div>`;
+  document.body.appendChild(m);
+  const close = () => m.remove();
+  m.onclick = e => { if (e.target === m) close(); };
+  m.querySelector('#k_cancel').onclick = close;
+  m.querySelector('#k_save').onclick = async () => {
+    const cams = [...m.querySelectorAll('.keepcams input:checked')].map(i => i.value);
+    if (!cams.length) { m.querySelector('#k_msg').textContent = 'Pick at least one camera.'; return; }
+    const name = m.querySelector('#k_name').value, btn = m.querySelector('#k_save');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      for (const c of cams) await post(`api/cameras/${c}/save`, { start: a, end: b, name });
+      close(); toast(`Kept ${cams.length} camera${cams.length > 1 ? 's' : ''} — find ${cams.length > 1 ? 'them' : 'it'} under Saved.`);
+      loadCameras();
+    } catch (e) { m.querySelector('#k_msg').textContent = 'Save failed: ' + e.message; btn.disabled = false; btn.textContent = 'Keep'; }
+  };
 };
 $('#lay-grid').onclick = () => { S.layout = 'grid'; layoutGrid(); renderAll(); };
 $('#lay-focus').onclick = () => { S.layout = 'focus'; layoutGrid(); renderAll(); };
@@ -1793,8 +1827,8 @@ async function renderSaved() {
   let clips, au = null;
   try { clips = await api('api/saved'); } catch { root.innerHTML = '<p class="hint">Failed to load.</p>'; return; }
   try { au = (await api('api/config')).settings.autosave; } catch {}
-  const kept = clips.filter(c => !c.auto), auto = clips.filter(c => c.auto);
-  const total = list => fmtBytes(list.reduce((a, c) => a + c.size, 0));
+  const kept = groupClips(clips.filter(c => !c.auto)), auto = groupClips(clips.filter(c => c.auto));
+  const total = groups => fmtBytes(groups.flat().reduce((a, c) => a + c.size, 0));
   const limits = au ? (au.enabled ? `kept ${au.max_days || '∞'} days / ${au.max_gb || '∞'} GB, oldest removed first` : 'auto-save is off (Settings)') : '';
   root.innerHTML = `
     <div style="display:flex;align-items:baseline;gap:8px"><h2>Saved clips (${kept.length})</h2>
@@ -1805,7 +1839,7 @@ async function renderSaved() {
     ${auto.length ? '<div class="savedgrid" id="autolist"></div>' : '<div class="scard"><p class="hint">Nothing yet — a clip (10 s before to 30 s after) is kept here for every pushed event.</p></div>'}`;
   for (const [listId, items] of [['#savedlist', kept], ['#autolist', auto]]) {
     const list = $(listId); if (!list) continue;
-    for (const c of items) list.appendChild(savedCard(c));
+    for (const g of items) list.appendChild(savedCard(g));
   }
 }
 // "<cam>-YYYYMMDD-HHMMSS-..." -> the clip's start (local time), or null.
@@ -1813,55 +1847,74 @@ function clipStart(name) {
   const m = name.match(/^[^-]+-(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)/);
   return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000 : null;
 }
-function savedCard(c) {
-  const cam = camById(c.name.split('-')[0]);
-  const n = encodeURIComponent(c.name);
+// Clips saved together (one per camera: same start, same name) form one card.
+const clipKey = name => name.replace(/^[^-]+-/, '').replace(/\.mp4$/, '');
+function groupClips(clips) {
+  const by = new Map();
+  for (const c of clips) { const k = clipKey(c.name); if (!by.has(k)) by.set(k, []); by.get(k).push(c); }
+  const order = id => { const i = cameras.findIndex(c => c.id === id); return i < 0 ? 99 : i; };
+  return [...by.values()].map(g => g.sort((a, b) => order(a.name.split('-')[0]) - order(b.name.split('-')[0])));
+}
+const clipCam = c => c.name.split('-')[0];
+function savedCard(g) {
+  const first = g[0], t0 = clipStart(first.name), auto = first.auto;
+  const label = clipKey(first.name).split('-').slice(2).filter(x => x !== 'auto' && x !== 'kept').join(' ');
   const card = document.createElement('div'); card.className = 'scard clip';
-  card.innerHTML = `<button class="thumb" aria-label="Play ${esc(c.name)}">
-      <img alt="" loading="lazy" src="api/saved/${n}/thumb" onerror="this.classList.add('broken')">
-      <span class="play">${ICON_PLAY}</span></button>
-    <div class="meta"><b>${esc(c.auto && clipStart(c.name) ? `${cam ? cam.name : c.name.split('-')[0]} · ${fmtDay(clipStart(c.name))} ${fmtTime(clipStart(c.name))}` : c.name)}</b>
-      <span class="sub">${cam ? esc(cam.name) + ' · ' : ''}${fmtBytes(c.size)} · saved ${new Date(c.ctime * 1000).toLocaleString()}</span>
-      <span class="acts"><a class="btn" href="saved/${n}" download>Download</a>${c.auto ? '<button class="btn keep">Keep</button>' : ''}<button class="btn del">Delete</button></span></div>`;
-  card.querySelector('.thumb').onclick = () => playSaved(c);
+  card.innerHTML = `<div class="thumbs n${Math.min(g.length, 3)}">${g.map((c, i) => `<button class="thumb" data-i="${i}" aria-label="Play ${esc(camName(clipCam(c)))}">
+        <img alt="" loading="lazy" src="api/saved/${encodeURIComponent(c.name)}/thumb" onerror="this.classList.add('broken')">
+        <span class="play">${ICON_PLAY}</span><span class="cam">${esc(camName(clipCam(c)))}</span></button>`).join('')}</div>
+    <div class="meta"><b>${esc(label || (auto ? 'Pushed event' : 'Saved clip'))}${t0 ? ` · ${fmtDay(t0)} ${fmtTime(t0)}` : ''}</b>
+      <span class="sub">${g.map(c => esc(camName(clipCam(c)))).join(', ')} · ${fmtBytes(g.reduce((a, c) => a + c.size, 0))}</span>
+      <span class="acts">${g.length === 1 ? `<a class="btn" href="saved/${encodeURIComponent(first.name)}" download>Download</a>` : '<button class="btn dl">Download…</button>'}${auto ? '<button class="btn keep">Keep</button>' : ''}<button class="btn del">Delete</button></span></div>`;
+  card.querySelectorAll('.thumb').forEach(b => b.onclick = () => playSaved(g[+b.dataset.i], g));
+  const dl = card.querySelector('.dl');
+  if (dl) dl.onclick = () => {   // one file per camera
+    const acts = dl.parentElement;
+    acts.innerHTML = g.map(c => `<a class="btn" href="saved/${encodeURIComponent(c.name)}" download>${esc(camName(clipCam(c)))}</a>`).join('');
+  };
   card.querySelector('.del').onclick = async () => {
-    if (!confirm('Delete saved clip ' + c.name + '?')) return;
-    await fetch('api/saved/' + n, { method: 'DELETE' });
+    if (!confirm(`Delete ${g.length > 1 ? `these ${g.length} clips` : 'this clip'} (${g.map(c => camName(clipCam(c))).join(', ')})?`)) return;
+    for (const c of g) await fetch('api/saved/' + encodeURIComponent(c.name), { method: 'DELETE' });
     renderSaved(); loadCameras();
   };
   const keep = card.querySelector('.keep');
   if (keep) keep.onclick = async () => {
-    try { await post(`api/saved/${n}/keep`, {}); toast('Kept — moved to Saved clips, never auto-deleted.'); renderSaved(); }
+    try { for (const c of g) await post(`api/saved/${encodeURIComponent(c.name)}/keep`, {}); toast('Kept — moved to Saved clips, never auto-deleted.'); renderSaved(); }
     catch (e) { toast('Keep failed: ' + e.message); }
   };
   return card;
 }
-// Saved clips are the original HEVC files; play them through the H.264 transcode
-// (with sound) so they work in every browser. Download keeps the original.
-function playSaved(c) {
-  const n = encodeURIComponent(c.name);
-  // WebKit can't play the live transcode (no Range): wait for the seekable copy there.
-  const wait = !c.seekable && RANGED;
+// The player for one clip of a group; the camera buttons switch to the same moment
+// in another camera's clip.
+function playSaved(c, group = [c]) {
   const m = document.createElement('div'); m.id = 'modal';
-  m.innerHTML = `<div class="box"><video controls autoplay playsinline ${wait ? '' : `src="api/saved/${n}/play.mp4"`}></video>
-    ${c.seekable ? '' : `<p class="hint" id="m_prep">${wait ? 'Preparing this clip for playback — a few seconds…' : 'Preparing a seekable copy of this clip — until it\'s ready you can only seek within what has loaded.'}</p>`}
-    <div class="mbar"><b style="flex:1;word-break:break-all">${esc(c.name)}</b>
-    <a class="btn" href="saved/${n}" download>Download</a><button class="btn" id="m_close">Close</button></div></div>`;
-  let poll = null;
-  const close = () => { clearTimeout(poll); const v = m.querySelector('video'); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
+  m.innerHTML = `<div class="box"><video controls autoplay playsinline></video><p class="hint" id="m_prep"></p>
+    <div class="mbar"><span class="camtabs">${group.length > 1 ? group.map((x, i) => `<button class="btn" data-i="${i}">${esc(camName(clipCam(x)))}</button>`).join('') : `<b>${esc(camName(clipCam(c)))}</b>`}</span>
+    <span style="flex:1"></span><a class="btn" id="m_dl" download>Download</a><button class="btn" id="m_close">Close</button></div></div>`;
+  const v = m.querySelector('video'), prep = m.querySelector('#m_prep');
+  let poll = null, cur = null;
+  const show = (x, at = 0) => {
+    clearTimeout(poll); cur = x;
+    const n = encodeURIComponent(x.name);
+    m.querySelector('#m_dl').href = `saved/${n}`;
+    m.querySelectorAll('.camtabs .btn').forEach(b => b.classList.toggle('keep', group[+b.dataset.i] === x));
+    // WebKit can't play the live transcode (no Range): wait for the seekable copy there.
+    const start = () => { prep.textContent = x.seekable ? '' : 'Preparing a seekable copy of this clip — until it\'s ready you can only seek within what has loaded.';
+      v.src = `api/saved/${n}/play.mp4`; if (at) v.addEventListener('loadedmetadata', () => { v.currentTime = at; }, { once: true }); v.play().catch(() => {}); };
+    if (x.seekable || !RANGED) { start(); return; }
+    v.removeAttribute('src'); v.load(); prep.textContent = 'Preparing this clip for playback — a few seconds…';
+    const check = async () => {
+      try { const y = (await api('api/saved')).find(s => s.name === x.name); if (y && y.seekable) { x.seekable = true; if (cur === x) start(); return; } } catch {}
+      if (document.body.contains(m) && cur === x) poll = setTimeout(check, 2000);
+    };
+    poll = setTimeout(check, 1500);
+  };
+  m.querySelectorAll('.camtabs .btn').forEach(b => b.onclick = () => show(group[+b.dataset.i], v.currentTime || 0));
+  const close = () => { clearTimeout(poll); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
   m.onclick = e => { if (e.target === m) close(); };
   m.querySelector('#m_close').onclick = close;
   document.body.appendChild(m);
-  if (wait) {
-    const check = async () => {
-      try {
-        const x = (await api('api/saved')).find(s => s.name === c.name);
-        if (x && x.seekable) { m.querySelector('#m_prep').remove(); const v = m.querySelector('video'); v.src = `api/saved/${n}/play.mp4`; v.play().catch(() => {}); return; }
-      } catch {}
-      if (document.body.contains(m)) poll = setTimeout(check, 2000);
-    };
-    poll = setTimeout(check, 1500);
-  }
+  show(c);
 }
 
 // ---------------------------------------------------------------- settings
@@ -2110,7 +2163,7 @@ window.addEventListener('hashchange', () => tab(tabFromHash()));
   setInterval(() => loadCameras().catch(() => {}), 30000);
   addEventListener('scroll', () => document.body.classList.toggle('scrolled', scrollY > 60), { passive: true });
   let wasPhone = isPhone();
-  window.addEventListener('resize', () => { if (isPhone() !== wasPhone) { wasPhone = isPhone(); layoutGrid(); renderTimeline(); } });
+  window.addEventListener('resize', () => { if (isPhone() !== wasPhone) { wasPhone = isPhone(); layoutGrid(); renderTimeline(); renderTransport(); } });
 })();
 </script>
 </body>
