@@ -46,18 +46,27 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        warm = None
+        warm = reg = None
         if run_recorders:
             if go2rtc.enabled:
-                # Before the workers: live view + motion read go2rtc's restreams.
-                await go2rtc.register_all()
+                # Live view + motion read go2rtc's restreams: their workers wait for this
+                # (sup.sub_ready). Recording doesn't, so a restart loses as little as possible.
+                async def register():
+                    try:
+                        await go2rtc.register_all()
+                    finally:
+                        sup.sub_ready.set()
+                reg = asyncio.create_task(register())
+            else:
+                sup.sub_ready.set()
             await sup.start()
             converter.start()
             if go2rtc.enabled:
                 warm = asyncio.create_task(go2rtc.keep_warm())
         yield
-        if warm:
-            warm.cancel()
+        for t in (warm, reg):
+            if t:
+                t.cancel()
         await converter.stop()
         await sup.stop()
 

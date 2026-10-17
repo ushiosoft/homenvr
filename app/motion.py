@@ -47,8 +47,10 @@ def motion_cmd(cam: Camera, cfg: Config, url: str | None = None) -> list[str]:
 class MotionDetector:
     """Supervised per-camera motion analyzer with backoff restart."""
 
-    def __init__(self, cam: Camera, cfg: Config, store: EventStore, on_event=None):
+    def __init__(self, cam: Camera, cfg: Config, store: EventStore, on_event=None,
+                 ready: asyncio.Event | None = None):
         self.cam, self.cfg, self.store = cam, cfg, store
+        self.ready = ready  # wait for this (go2rtc registered) before reading the sub-stream
         self.on_event = on_event  # optional async callback(camera_id, ts, score)
         self._stopping = False
         self._proc: asyncio.subprocess.Process | None = None
@@ -77,6 +79,8 @@ class MotionDetector:
             fallback_timer = None
             try:
                 # Same source as the live view: go2rtc's restream first, NVR as fallback.
+                if self.ready is not None:
+                    await self.ready.wait()
                 url, _info, fallback = await pick_source(sub_sources(self.cam, self.cfg), self.cfg.rtsp_transport)
                 if fallback:
                     log.warning("[%s/motion] go2rtc unavailable; reading the NVR directly for now", self.cam.id)

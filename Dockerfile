@@ -19,4 +19,6 @@ RUN chmod 644 app/static/hls.min.js
 ENV HOMENVR_CONFIG=/config/config.yml PYTHONUNBUFFERED=1
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"
-CMD ["uvicorn", "app.main:app_factory", "--factory", "--host", "0.0.0.0", "--port", "8080"]
+# Graceful-shutdown timeout: open video streams would otherwise hold a restart for
+# as long as a viewer keeps the page open.
+CMD ["uvicorn", "app.main:app_factory", "--factory", "--host", "0.0.0.0", "--port", "8080", "--timeout-graceful-shutdown", "5"]

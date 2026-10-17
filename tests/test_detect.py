@@ -106,3 +106,26 @@ def test_pick_frame_prefers_person_then_vehicle_then_trigger():
     sc2 = [none, {"person": 0.0, "vehicle": 0.6}, none, none, none, none]
     assert pick_frame(f, sc2) == (1, ["vehicle"])
     assert pick_frame(f, [none] * 6) == (3, [])                      # ~the trigger moment
+
+
+def test_yolox_garbage_output_does_not_fail():
+    """Regression: a garbage network output overflowed exp() -> inf -> int() raised
+    and the whole motion event lost its label, thumbnail and push."""
+    import numpy as np
+    import pytest
+    cv2 = pytest.importorskip("cv2")
+    from app import detect
+    d = object.__new__(detect.ObjectDetector)
+    d._cv2, d._np, d.confidence = cv2, np, 0.45
+    d._grid = detect.ObjectDetector._yolox_grid(np)
+    n = len(d._grid[0])
+    o = np.zeros((n, 85), np.float32)
+    o[0, 4], o[0, 5], o[0, 2:4] = 1.0, 0.9, 500.0        # person with an absurd size
+    o[1, 4], o[1, 5], o[1, 0] = 1.0, 0.9, np.nan        # person at NaN
+
+    class Net:
+        def setInput(self, _): pass
+        def forward(self): return o[None]
+    d._net = Net()
+    out = d._yolox(np.zeros((360, 640, 3), np.uint8))
+    assert [c for c, _s, _b in out] == ["person"]

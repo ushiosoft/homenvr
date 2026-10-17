@@ -182,9 +182,13 @@ class ObjectDetector:
             return []
         grid, stride = self._grid
         xy = (o[keep, :2] + grid[keep]) * stride[keep]
-        wh = np.exp(o[keep, 2:4]) * stride[keep]
+        # Clamp the log-size: a garbage output (seen once, on a frame decoded while the
+        # server was shutting down) overflowed exp() to inf and failed the whole event.
+        wh = np.exp(np.clip(o[keep, 2:4], -10, 8)) * stride[keep]
         out = []
         for k, (cx, cy), (bw, bh) in zip(keep, xy, wh):
+            if not np.isfinite((cx, cy, bw, bh)).all():
+                continue
             c = int(cls[k].argmax())
             out.append((COCO_CAT[idx[c]], float(cls[k, c]),
                         (int((cx - bw / 2) / r), int((cy - bh / 2) / r), int((cx + bw / 2) / r), int((cy + bh / 2) / r))))

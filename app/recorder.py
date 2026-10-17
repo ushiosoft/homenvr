@@ -421,8 +421,9 @@ class ProcState:
 class Worker:
     """Keeps one ffmpeg process alive with exponential backoff."""
 
-    def __init__(self, cam: Camera, cfg: Config, kind: str, out_dir: Path):
+    def __init__(self, cam: Camera, cfg: Config, kind: str, out_dir: Path, ready: asyncio.Event | None = None):
         self.cam, self.cfg, self.kind, self.out_dir = cam, cfg, kind, out_dir
+        self.ready = ready  # live: wait for this (go2rtc registered) before the first start
         self.state = ProcState(kind)
         self._proc: asyncio.subprocess.Process | None = None
         self._stopping = False
@@ -437,6 +438,8 @@ class Worker:
                     url = self.cam.record_url  # recording keeps its own direct NVR connection
                     info = await probe(url, self.cfg.rtsp_transport)
                 else:
+                    if self.ready is not None:
+                        await self.ready.wait()
                     url, info, fallback = await pick_source(sub_sources(self.cam, self.cfg), self.cfg.rtsp_transport)
                     if fallback:
                         log.warning("[%s/live] go2rtc unavailable; reading the NVR directly for now", self.cam.id)
@@ -508,6 +511,9 @@ class Supervisor:
         self.converter = None  # clips.ClipConverter, set by the app: auto-saved clips get a seekable copy
         self.autosaver = None  # clips.AutoSaver, set in start()
         self._tasks: list[asyncio.Task] = []
+        # Set once go2rtc's streams are registered (or there's no go2rtc): the live and
+        # motion workers wait for it, recording doesn't. Set by the app.
+        self.sub_ready = asyncio.Event()
 
     def reload_notifier(self) -> None:
         """Rebuild the alert notifier from the (possibly updated) config."""
@@ -623,11 +629,11 @@ class Supervisor:
             if not cam.enabled:
                 continue
             for kind, out in (("record", self.storage.camera_dir(cam.id)), ("live", self.cfg.live_dir / cam.id)):
-                w = Worker(cam, self.cfg, kind, out)
+                w = Worker(cam, self.cfg, kind, out, ready=self.sub_ready if kind == "live" else None)
                 self.workers[(cam.id, kind)] = w
                 self._tasks.append(asyncio.create_task(w.run(), name=f"{cam.id}-{kind}"))
             if self.cfg.motion.enabled:
-                md = MotionDetector(cam, self.cfg, self.events, on_event=self._motion_alert)
+                md = MotionDetector(cam, self.cfg, self.events, on_event=self._motion_alert, ready=self.sub_ready)
                 self.motion[cam.id] = md
                 self._tasks.append(asyncio.create_task(md.run(), name=f"{cam.id}-motion"))
         self._tasks.append(asyncio.create_task(self._retention_loop(), name="retention"))
