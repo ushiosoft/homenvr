@@ -385,6 +385,18 @@ async def recording_frames(storage: Storage, cam: Camera, start: float, end: flo
     return split_jpegs(out)
 
 
+STAMP_CHECK_AFTER = 25.0   # seconds into a recorder run before its first file's name is checked
+
+
+async def probe_duration(path) -> float:
+    """Media duration of a (possibly still growing, fragmented) MP4 file."""
+    proc = await asyncio.create_subprocess_exec(
+        FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+    out, _ = await asyncio.wait_for(proc.communicate(), 20)
+    return float(out.decode().strip())
+
+
 def save_thumb(path: Path, img: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
@@ -492,7 +504,7 @@ class Worker:
         backoff = 2.0
         while not self._stopping:
             t0 = time.monotonic()
-            fallback_timer = None
+            fallback_timer = stamp_fix = None
             try:
                 if self.kind == "record":
                     url = self.cam.record_url  # recording keeps its own direct NVR connection
@@ -518,6 +530,8 @@ class Worker:
                     stderr=asyncio.subprocess.PIPE, env={**os.environ, "TZ": "UTC"},
                 )
                 self.state.running, self.state.started_at = True, time.time()
+                if self.kind == "record":
+                    stamp_fix = asyncio.ensure_future(self._fix_first_stamp(self.state.started_at))
                 assert self._proc.stderr
                 async for line in self._proc.stderr:
                     msg = redact(line.decode(errors="replace").rstrip())
@@ -534,6 +548,8 @@ class Worker:
             finally:
                 self.state.running = False
                 self._proc = None
+                if stamp_fix:
+                    stamp_fix.cancel()
                 if fallback_timer:
                     fallback_timer.cancel()
             if self._stopping:
@@ -543,6 +559,37 @@ class Worker:
             self.state.restarts += 1
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
+
+    async def _fix_first_stamp(self, since: float) -> None:
+        """Name the first file of a recorder (re)start after when its footage begins.
+
+        Files are named by the wall clock when ffmpeg opens them, but on connect the NVR
+        first sends a few seconds of buffered video, so the first file's footage starts
+        that much earlier than its name (seen: 0-6 s, per camera and restart), and the
+        review timeline, boxes and incidents are off by it for those 10 minutes. After
+        a while, compare how much footage the file holds with how long it has been
+        written; if it holds more, rename it to start that much earlier. (Later files
+        are split by stream time while live, so their names are right.)
+        """
+        from .storage import format_stamp, parse_stamp
+        await asyncio.sleep(STAMP_CHECK_AFTER)
+        files = [p for p in self.out_dir.glob("*.mp4") if (parse_stamp(p.name) or 0) >= since - 5]
+        if not files:
+            return
+        p = min(files, key=lambda p: parse_stamp(p.name))
+        stamp = parse_stamp(p.name)
+        try:
+            held = await probe_duration(p)
+            lead = held - (p.stat().st_mtime - stamp)
+        except Exception as e:  # noqa: BLE001
+            log.debug("[%s] stamp check failed: %s", self.cam.id, e)
+            return
+        if 1.0 < lead < 60:
+            new = p.with_name(format_stamp(stamp - lead) + ".mp4")
+            if not new.exists():
+                p.rename(new)   # ffmpeg keeps writing through its open file
+                log.info("[%s] %s starts %.1f s before its name (NVR pre-buffer); renamed to %s",
+                         self.cam.id, p.name, lead, new.name)
 
     async def stop(self) -> None:
         self._stopping = True

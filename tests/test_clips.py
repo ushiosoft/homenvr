@@ -3,6 +3,7 @@ import asyncio
 import os
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -122,3 +123,28 @@ def test_recording_frames_cover_exactly_the_window(tmp_path):
     frames = asyncio.run(recording_frames(Storage(tmp_path), cfg.cameras[0], BASE + 5.0, BASE + 9.0))
     assert len(frames) == 8 and all(f[:2] == b"\xff\xd8" for f in frames)
     assert asyncio.run(recording_frames(Storage(tmp_path), cfg.cameras[0], BASE + 100, BASE + 104)) == []
+
+
+def test_first_file_renamed_to_when_its_footage_starts(tmp_path, monkeypatch):
+    """The NVR's pre-buffer makes a restart's first file hold footage from before its
+    name: it's renamed to start that much earlier."""
+    from app import recorder
+    from app.storage import parse_stamp
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    d = tmp_path / "cam1"; d.mkdir()
+    now = time.time()
+    stamp = int(now) - 30
+    f = d / f"{format_stamp(stamp)}.mp4"; f.write_bytes(b"x")
+    os.utime(f, (now, now))                     # written until now: 30 s of wall time
+    async def held(_p): return 34.0             # ... but it holds 34 s of footage
+    monkeypatch.setattr(recorder, "probe_duration", held)
+    monkeypatch.setattr(recorder, "STAMP_CHECK_AFTER", 0)
+    w = recorder.Worker(cfg.cameras[0], cfg, "record", d)
+    asyncio.run(w._fix_first_stamp(stamp))
+    names = [p.name for p in d.glob("*.mp4")]
+    assert len(names) == 1 and parse_stamp(names[0]) == pytest.approx(stamp - 4, abs=1)
+    async def ok(_p): return 30.2               # a right name stays
+    monkeypatch.setattr(recorder, "probe_duration", ok)
+    g = d / names[0]; os.utime(g, (now, now))
+    asyncio.run(w._fix_first_stamp(parse_stamp(names[0])))
+    assert [p.name for p in d.glob("*.mp4")] == names
