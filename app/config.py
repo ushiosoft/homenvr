@@ -95,6 +95,16 @@ class Alerts:
 
 
 @dataclass
+class AutoSave:
+    """Clips of pushed events, kept in Saved with their own limits (app/clips.py)."""
+    enabled: bool = True
+    before: float = 10.0   # seconds of footage before the pushed event
+    after: float = 30.0    # ... and after the last push of the incident
+    max_days: float = 90.0  # 0 = no limit
+    max_gb: float = 50.0    # 0 = no limit
+
+
+@dataclass
 class Motion:
     enabled: bool = False
     # "scene" score threshold (0-1); higher = less sensitive. ffmpeg scdet.
@@ -118,6 +128,7 @@ class Config:
     rtsp_transport: str = "tcp"
     alerts: Alerts = field(default_factory=Alerts)
     motion: Motion = field(default_factory=Motion)
+    autosave: AutoSave = field(default_factory=AutoSave)
     events_db: Path = Path("/recordings/events.db")
     # go2rtc sidecar API for low-latency WebRTC live view ("" = off: HLS only).
     webrtc_api: str = ""
@@ -179,6 +190,7 @@ def parse(raw: dict) -> Config:
     ui = raw.get("ui") or {}
     a = raw.get("alerts") or {}
     m = raw.get("motion") or {}
+    au = raw.get("autosave") or {}
     storage_dir = Path(raw.get("storage_dir", "/recordings"))
     return Config(
         storage_dir=storage_dir,
@@ -215,6 +227,13 @@ def parse(raw: dict) -> Config:
             cooldown_seconds=float(m.get("cooldown_seconds", 3.0)),
             detect=bool(m.get("detect", True)),
             detect_confidence=float(m.get("detect_confidence", 0.45)),
+        ),
+        autosave=AutoSave(
+            enabled=bool(au.get("enabled", True)),
+            before=float(au.get("before", 10)),
+            after=float(au.get("after", 30)),
+            max_days=float(au.get("max_days", 90) or 0),
+            max_gb=float(au.get("max_gb", 50) or 0),
         ),
         events_db=Path(raw.get("events_db", str(storage_dir / "events.db"))),
         webrtc_api=str(raw.get("webrtc_api", "") or "").rstrip("/"),

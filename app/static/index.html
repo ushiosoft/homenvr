@@ -272,6 +272,9 @@
   .camblock .ctitle { font-weight:600; margin-bottom:4px; }
 
   /* ---- modal / loading / toast ---- */
+  .cfgtext { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:12px/1.5 var(--mono); max-height:420px; overflow:auto; white-space:pre; margin:10px 0; }
+  .envtable { display:grid; grid-template-columns:max-content 1fr; gap:2px 16px; font-size:12px; margin-top:8px; }
+  .envtable .k { color:var(--muted); }
   #modal { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.82); padding:16px; }
   #modal .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; max-width:min(96vw,900px); }
   #modal img { max-width:100%; max-height:70vh; border-radius:6px; display:block; background:#000; }
@@ -1694,31 +1697,51 @@ async function openSnapshot(camId, name) {
 async function renderSaved() {
   const root = $('#saved');
   root.innerHTML = '<p class="hint">Loading…</p>';
-  let clips;
+  let clips, au = null;
   try { clips = await api('api/saved'); } catch { root.innerHTML = '<p class="hint">Failed to load.</p>'; return; }
-  if (!clips.length) { root.innerHTML = '<div class="scard"><h3>Saved clips</h3><p class="hint">None yet. While reviewing, press <b>Keep</b> to save the incident (or 60 s). Saved clips are never auto-deleted.</p></div>'; return; }
-  root.innerHTML = `<div style="display:flex;align-items:baseline;gap:8px"><h2>Saved clips (${clips.length})</h2>
-    <span class="sub">Permanent — excluded from retention · ${fmtBytes(clips.reduce((a, c) => a + c.size, 0))}</span></div>
-    <div class="savedgrid" id="savedlist"></div>`;
-  const list = $('#savedlist');
-  for (const c of clips) {
-    const cam = camById(c.name.split('-')[0]);
-    const n = encodeURIComponent(c.name);
-    const card = document.createElement('div'); card.className = 'scard clip';
-    card.innerHTML = `<button class="thumb" aria-label="Play ${esc(c.name)}">
-        <img alt="" loading="lazy" src="api/saved/${n}/thumb" onerror="this.classList.add('broken')">
-        <span class="play">${ICON_PLAY}</span></button>
-      <div class="meta"><b>${esc(c.name)}</b>
-        <span class="sub">${cam ? esc(cam.name) + ' · ' : ''}${fmtBytes(c.size)} · saved ${new Date(c.ctime * 1000).toLocaleString()}</span>
-        <span class="acts"><a class="btn" href="saved/${n}" download>Download</a><button class="btn del">Delete</button></span></div>`;
-    card.querySelector('.thumb').onclick = () => playSaved(c);
-    card.querySelector('.del').onclick = async () => {
-      if (!confirm('Delete saved clip ' + c.name + '?')) return;
-      await fetch('api/saved/' + n, { method: 'DELETE' });
-      renderSaved(); loadCameras();
-    };
-    list.appendChild(card);
+  try { au = (await api('api/config')).settings.autosave; } catch {}
+  const kept = clips.filter(c => !c.auto), auto = clips.filter(c => c.auto);
+  const total = list => fmtBytes(list.reduce((a, c) => a + c.size, 0));
+  const limits = au ? (au.enabled ? `kept ${au.max_days || '∞'} days / ${au.max_gb || '∞'} GB, oldest removed first` : 'auto-save is off (Settings)') : '';
+  root.innerHTML = `
+    <div style="display:flex;align-items:baseline;gap:8px"><h2>Saved clips (${kept.length})</h2>
+      <span class="sub">Permanent — excluded from retention${kept.length ? ' · ' + total(kept) : ''}</span></div>
+    ${kept.length ? '<div class="savedgrid" id="savedlist"></div>' : '<div class="scard"><p class="hint">None yet. While reviewing, press <b>Keep</b> to save the incident (or 60 s), or <b>Keep</b> an auto-saved clip below. Saved clips are never auto-deleted.</p></div>'}
+    <div style="display:flex;align-items:baseline;gap:8px;margin-top:8px"><h2>Auto-saved (${auto.length})</h2>
+      <span class="sub">Clips of pushed events, every camera that saw them · ${limits}${auto.length ? ' · ' + total(auto) : ''}</span></div>
+    ${auto.length ? '<div class="savedgrid" id="autolist"></div>' : '<div class="scard"><p class="hint">Nothing yet — a clip (10 s before to 30 s after) is kept here for every pushed event.</p></div>'}`;
+  for (const [listId, items] of [['#savedlist', kept], ['#autolist', auto]]) {
+    const list = $(listId); if (!list) continue;
+    for (const c of items) list.appendChild(savedCard(c));
   }
+}
+// "<cam>-YYYYMMDD-HHMMSS-..." -> the clip's start (local time), or null.
+function clipStart(name) {
+  const m = name.match(/^[^-]+-(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)/);
+  return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000 : null;
+}
+function savedCard(c) {
+  const cam = camById(c.name.split('-')[0]);
+  const n = encodeURIComponent(c.name);
+  const card = document.createElement('div'); card.className = 'scard clip';
+  card.innerHTML = `<button class="thumb" aria-label="Play ${esc(c.name)}">
+      <img alt="" loading="lazy" src="api/saved/${n}/thumb" onerror="this.classList.add('broken')">
+      <span class="play">${ICON_PLAY}</span></button>
+    <div class="meta"><b>${esc(c.auto && clipStart(c.name) ? `${cam ? cam.name : c.name.split('-')[0]} · ${fmtDay(clipStart(c.name))} ${fmtTime(clipStart(c.name))}` : c.name)}</b>
+      <span class="sub">${cam ? esc(cam.name) + ' · ' : ''}${fmtBytes(c.size)} · saved ${new Date(c.ctime * 1000).toLocaleString()}</span>
+      <span class="acts"><a class="btn" href="saved/${n}" download>Download</a>${c.auto ? '<button class="btn keep">Keep</button>' : ''}<button class="btn del">Delete</button></span></div>`;
+  card.querySelector('.thumb').onclick = () => playSaved(c);
+  card.querySelector('.del').onclick = async () => {
+    if (!confirm('Delete saved clip ' + c.name + '?')) return;
+    await fetch('api/saved/' + n, { method: 'DELETE' });
+    renderSaved(); loadCameras();
+  };
+  const keep = card.querySelector('.keep');
+  if (keep) keep.onclick = async () => {
+    try { await post(`api/saved/${n}/keep`, {}); toast('Kept — moved to Saved clips, never auto-deleted.'); renderSaved(); }
+    catch (e) { toast('Keep failed: ' + e.message); }
+  };
+  return card;
 }
 // Saved clips are the original HEVC files; play them through the H.264 transcode
 // (with sound) so they work in every browser. Download keeps the original.
@@ -1781,10 +1804,25 @@ async function renderSettings() {
       <div class="frow"><button class="btn" id="s_saver">Save retention</button><span class="saved" id="s_rmsg"></span></div>
     </div>
     <div class="scard">
+      <h3>Auto-save pushed events</h3>
+      <p class="hint">For every pushed event, keep a clip (${cfg.settings.autosave.before} s before to ${cfg.settings.autosave.after} s after) of each camera that saw it, under Saved → Auto-saved. These have their own limits, separate from retention; <b>Keep</b> on one makes it permanent. 0 = unlimited.</p>
+      <div class="frow"><label>Auto-save</label><input id="s_auto" type="checkbox" ${cfg.settings.autosave.enabled ? 'checked' : ''}><span class="sub">needs push notifications on</span></div>
+      <div class="frow"><label>Keep days</label><input id="s_audays" type="number" min="0" value="${cfg.settings.autosave.max_days}"></div>
+      <div class="frow"><label>Max total GB</label><input id="s_augb" type="number" min="0" value="${cfg.settings.autosave.max_gb}"></div>
+      <div class="frow"><button class="btn" id="s_saveau">Save auto-save</button><span class="saved" id="s_aumsg"></span></div>
+    </div>
+    <div class="scard">
       <h3>Cameras</h3>
       <p class="hint">Per-camera tuning. Rotation applies everywhere (live, snapshots, thumbnails, playback) and syncs across devices. Motion sensitivity "global" = ${m.sensitivity}; lower = more sensitive.</p>
       <div id="camsettings"></div>
       <p class="hint" style="margin-top:12px">Image settings (brightness, night mode/IR, WDR, encoding bitrate/resolution) live on the NVR and need its HTTP/ISAPI port enabled — not available while that port is closed.</p>
+    </div>
+    <div class="scard">
+      <h3>Server configuration</h3>
+      <p class="hint">Read-only: what homenvr started with — <span class="mono" id="sc_path">config.yml</span> and the environment from <span class="mono">.env</span>. Secrets are masked. Changes there are made on the server and apply after a restart.</p>
+      <div id="sc_env" class="envtable"></div>
+      <pre class="cfgtext" id="sc_cfg">Loading…</pre>
+      <div class="frow"><button class="btn" id="s_restart">Restart homenvr</button><span class="sub" id="s_rsmsg">Recording pauses for ~20 s while it restarts.</span></div>
     </div>`;
   const syncNotifierFields = () => {
     const n = $('#s_notifier').value;
@@ -1811,6 +1849,24 @@ async function renderSettings() {
   };
   $('#s_sens').oninput = () => { $('#s_sens_v').textContent = $('#s_sens').value; };
   $('#s_savem').onclick = () => save({ motion: { sensitivity: +$('#s_sens').value, min_gap_seconds: +$('#s_gap').value, detect: $('#s_detect').checked } }, $('#s_mmsg'));
+  $('#s_saveau').onclick = () => save({ autosave: { enabled: $('#s_auto').checked, max_days: +$('#s_audays').value, max_gb: +$('#s_augb').value } }, $('#s_aumsg'));
+  api('api/server-config').then(sc => {
+    $('#sc_path').textContent = sc.config_path;
+    $('#sc_cfg').textContent = sc.config;
+    $('#sc_env').innerHTML = sc.env.map(e => `<span class="mono k">${esc(e.key)}</span><span class="mono">${esc(e.value)}</span>`).join('');
+  }).catch(() => { $('#sc_cfg').textContent = 'Failed to load.'; });
+  $('#s_restart').onclick = async () => {
+    if (!confirm('Restart homenvr now? Recording and live view pause for ~20 s.')) return;
+    const msg = $('#s_rsmsg'), btn = $('#s_restart');
+    btn.disabled = true; msg.textContent = 'Restarting…';
+    try { await post('api/restart', {}); } catch (e) { msg.textContent = 'Restart failed: ' + e.message; btn.disabled = false; return; }
+    await new Promise(r => setTimeout(r, 3000));
+    for (let i = 0; i < 90; i++) {   // healthz needs no login; wait until it answers again
+      try { const r = await fetch('healthz', { cache: 'no-store' }); if (r.ok) { msg.textContent = 'Back — reloading…'; location.reload(); return; } } catch {}
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    msg.textContent = 'Still not back after 3 minutes — check the server (docker ps).'; btn.disabled = false;
+  };
   $('#s_saver').onclick = () => save({ retention: { max_days: +$('#s_days').value, max_gb: +$('#s_maxgb').value, min_free_gb: +$('#s_free').value } }, $('#s_rmsg'));
   const cs = $('#camsettings');
   const gsens = Math.min(20, Math.max(1, m.sensitivity));

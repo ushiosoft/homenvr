@@ -40,8 +40,9 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
 
     from .webrtc import Go2rtc
     go2rtc = Go2rtc(cfg)
-    from .clips import ClipConverter, ClipError, build_clip
+    from .clips import ClipConverter, ClipError, build_clip, delete_clip, is_auto, kept_name
     converter = ClipConverter(cfg, storage)
+    sup.converter = converter
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -397,7 +398,8 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         d = storage.saved_dir()
         import os as _os
         out = [{"name": e.name, "size": e.stat().st_size, "ctime": e.stat().st_mtime,
-                "url": f"saved/{e.name}", "seekable": converter.ready(Path(e.path)) is not None}
+                "url": f"saved/{e.name}", "seekable": converter.ready(Path(e.path)) is not None,
+                "auto": is_auto(e.name)}
                for e in _os.scandir(d) if e.is_file() and e.name.endswith(".mp4")]
         out.sort(key=lambda x: x["ctime"], reverse=True)
         return out
@@ -452,10 +454,39 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         p = _safe_saved(name)
         if not p:
             raise HTTPException(404)
-        p.unlink()
-        p.with_suffix(".jpg").unlink(missing_ok=True)
-        converter.remove(p)
+        delete_clip(p.parent, name)
         return {"deleted": name}
+
+    @app.post("/api/saved/{name}/keep")
+    async def keep_saved(name: str):
+        """Make an auto-saved clip permanent (out of the autosave limits)."""
+        p = _safe_saved(name)
+        if not p or not is_auto(name):
+            raise HTTPException(404)
+        dst = p.with_name(kept_name(name))
+        if dst.exists():
+            raise HTTPException(409, "a kept clip with that name exists")
+        for a, b in ((p, dst), (p.with_suffix(".jpg"), dst.with_suffix(".jpg")),
+                     (converter.play_path(p), converter.play_path(dst))):
+            if a.exists():
+                a.rename(b)
+        return {"kept": dst.name}
+
+    @app.get("/api/server-config")
+    async def server_config():
+        """config.yml and the environment it reads (.env), secrets masked — for the
+        read-only card on the Settings page."""
+        from .serverinfo import describe
+        return await asyncio.to_thread(describe)
+
+    @app.post("/api/restart")
+    async def restart():
+        """Exit; Docker's restart policy (unless-stopped) starts homenvr again. The
+        recorders are stopped cleanly first (SIGTERM -> lifespan shutdown)."""
+        import signal
+        log.warning("restart requested from the settings page")
+        asyncio.get_running_loop().call_later(0.5, os.kill, os.getpid(), signal.SIGTERM)
+        return {"restarting": True}
 
     usage_cache: dict = {"t": 0.0, "val": None, "task": None}
 

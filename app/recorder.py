@@ -505,6 +505,8 @@ class Supervisor:
         self._motion_pushing: set[str] = set()
         self._thumb_floor: dict[str, float] = {}  # per camera: thumbs before this are swept
         self._motion_pending: dict[str, tuple] = {}  # per camera: newest event waiting its turn
+        self.converter = None  # clips.ClipConverter, set by the app: auto-saved clips get a seekable copy
+        self.autosaver = None  # clips.AutoSaver, set in start()
         self._tasks: list[asyncio.Task] = []
 
     def reload_notifier(self) -> None:
@@ -555,6 +557,8 @@ class Supervisor:
             if want_detect:
                 if self.events is not None:
                     await asyncio.to_thread(self.events.set_label, eid, ",".join(labels))
+            if push_ready and should_push(policy, labels) and self.autosaver is not None:
+                self.autosaver.pushed(cam_id, ts)  # keep a clip of it (also inside the push cooldown)
             if push_now and not should_push(policy, labels):
                 log.debug("[%s] not pushed (push_on=%s, labels=%s)", cam_id, policy, labels or "none")
             elif push_now:
@@ -609,6 +613,9 @@ class Supervisor:
             from .events import EventStore
             from .motion import MotionDetector
             self.events = EventStore(self.cfg.events_db)
+        from .clips import AutoSaver
+        self.autosaver = AutoSaver(self.cfg, self.storage, self.events, self.converter)
+        if self.cfg.motion.enabled:
             if self.cfg.motion.detect:
                 from .detect import ObjectDetector
                 self.detector = ObjectDetector(confidence=self.cfg.motion.detect_confidence)
@@ -637,6 +644,11 @@ class Supervisor:
                     gone = await asyncio.to_thread(self.events.prune, time.time() - r.max_days * 86400)
                     for cam_id, eid in gone:
                         self.storage.delete_thumbs(cam_id, [eid])
+                au = self.cfg.autosave
+                from .clips import prune_auto
+                for name in await asyncio.to_thread(prune_auto, self.storage.saved_dir(), au.max_days,
+                                                    au.max_gb, time.time()):
+                    log.info("auto-saved clip %s removed (autosave limits)", name)
                 if self.events is not None and time.monotonic() - last_sweep > 600:
                     last_sweep = time.monotonic()
                     await asyncio.to_thread(self._sweep_thumbs)
@@ -672,6 +684,8 @@ class Supervisor:
             await asyncio.sleep(self.cfg.alerts.check_interval)
 
     async def stop(self) -> None:
+        if self.autosaver is not None:
+            await self.autosaver.stop()
         await asyncio.gather(*(w.stop() for w in self.workers.values()), return_exceptions=True)
         for t in self._tasks:
             t.cancel()

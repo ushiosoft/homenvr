@@ -180,3 +180,142 @@ class ClipConverter:
         part.replace(out)
         log.info("saved clip %s: seekable copy ready", clip.name)
         return out
+
+
+# ---- auto-saved clips of pushed events ------------------------------------------
+#
+# Every pushed event also keeps a clip, so what the phone was told about can be
+# watched later even after the recordings rotate away. Clips are named
+# "<cam>-<stamp>-auto.mp4" and have their own limits (autosave.max_days / max_gb);
+# "Keep" on the Saved page renames one to a normal (permanent) saved clip.
+
+AUTO_SUFFIX = "-auto.mp4"
+AUTO_MAX_SECONDS = 300   # one incident's clip is at most this long; later pushes start a new one
+
+
+def is_auto(name: str) -> bool:
+    return name.endswith(AUTO_SUFFIX)
+
+
+def auto_name(cam_id: str, start: float) -> str:
+    import time
+    return f"{cam_id}-{time.strftime('%Y%m%d-%H%M%S', time.localtime(start))}{AUTO_SUFFIX}"
+
+
+def kept_name(name: str) -> str:
+    """The permanent name for an auto clip ("...-auto.mp4" -> "...-kept.mp4")."""
+    return name[: -len(AUTO_SUFFIX)] + "-kept.mp4"
+
+
+def delete_clip(saved_dir: Path, name: str) -> None:
+    """A saved clip with its thumbnail and seekable copy."""
+    p = saved_dir / name
+    p.unlink(missing_ok=True)
+    p.with_suffix(".jpg").unlink(missing_ok=True)
+    (saved_dir / PLAY_DIR / name).unlink(missing_ok=True)
+
+
+def prune_auto(saved_dir: Path, max_days: float, max_gb: float, now: float) -> list[str]:
+    """Delete auto clips older than max_days, then the oldest until they fit max_gb
+    (counting their thumbnails and converted copies). 0 = no limit. Returns names."""
+    clips = []
+    for e in os.scandir(saved_dir):
+        if e.is_file() and is_auto(e.name):
+            p = Path(e.path)
+            size = e.stat().st_size
+            for extra in (p.with_suffix(".jpg"), saved_dir / PLAY_DIR / e.name):
+                try:
+                    st = extra.stat()
+                    size += st.st_size if st.st_nlink == 1 else 0
+                except OSError:
+                    pass
+            clips.append((e.stat().st_mtime, e.name, size))
+    clips.sort()
+    total = sum(c[2] for c in clips)
+    gone = []
+    for mtime, name, size in clips:
+        too_old = max_days > 0 and now - mtime > max_days * 86400
+        too_big = max_gb > 0 and total > max_gb * 1e9
+        if not (too_old or too_big):
+            break
+        delete_clip(saved_dir, name)
+        total -= size
+        gone.append(name)
+    return gone
+
+
+class AutoSaver:
+    """Collects pushed events into incidents and saves a clip per camera for each.
+
+    A push at ts opens (or extends) the current incident [ts - before, ts + after].
+    Once its end has passed and the recorder has written it (+ a margin), one clip
+    is cut per camera that saw it: the pushing camera(s), plus any camera with a
+    person/vehicle-labelled event in the window. Pushes landing inside the open
+    incident extend it (up to AUTO_MAX_SECONDS) instead of making overlapping clips.
+    """
+
+    SETTLE = 15  # seconds after the incident's end before cutting (recorder flush)
+
+    def __init__(self, cfg: Config, storage: Storage, events=None, converter: ClipConverter | None = None):
+        self.cfg, self.storage, self.events, self.converter = cfg, storage, events, converter
+        self.job: dict | None = None
+        self._tasks: set[asyncio.Task] = set()
+
+    def pushed(self, cam_id: str, ts: float) -> None:
+        a = self.cfg.autosave
+        if not a.enabled:
+            return
+        job = self.job
+        if job and ts - a.before <= job["end"] and ts + a.after - job["start"] <= AUTO_MAX_SECONDS:
+            job["end"] = max(job["end"], ts + a.after)
+            job["cams"].add(cam_id)
+            return
+        self.job = {"start": ts - a.before, "end": ts + a.after, "cams": {cam_id}}
+        task = asyncio.ensure_future(self._run(self.job))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _run(self, job: dict) -> None:
+        import time
+        while (wait := job["end"] + self.SETTLE - time.time()) > 0:
+            await asyncio.sleep(wait)   # the end may have moved meanwhile
+        if self.job is job:
+            self.job = None
+        try:
+            await self.save(job)
+        except Exception as e:  # noqa: BLE001
+            log.warning("auto-save failed: %s", e)
+
+    def cameras_for(self, job: dict) -> list[str]:
+        cams = set(job["cams"])
+        if self.events is not None:
+            for e in self.events.query_all(job["start"], job["end"]):
+                if e.get("label"):
+                    cams.add(e["camera"])
+        return sorted(c for c in cams if self.cfg.camera(c))
+
+    async def save(self, job: dict) -> list[Path]:
+        out = []
+        saved = self.storage.saved_dir()
+        for cam_id in await asyncio.to_thread(self.cameras_for, job):
+            dst = saved / auto_name(cam_id, job["start"])
+            if dst.exists():
+                continue
+            part = dst.with_suffix(".part")
+            try:
+                await build_clip(self.storage, cam_id, job["start"], job["end"], part, AUTO_MAX_SECONDS + 60)
+                part.replace(dst)
+            except ClipError as e:
+                part.unlink(missing_ok=True)
+                log.info("[%s] auto-save skipped: %s", cam_id, str(e)[:200])
+                continue
+            log.info("[%s] auto-saved %s", cam_id, dst.name)
+            if self.converter is not None:
+                self.converter.enqueue(dst)
+            out.append(dst)
+        return out
+
+    async def stop(self) -> None:
+        for t in list(self._tasks):
+            t.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)

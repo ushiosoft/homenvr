@@ -42,6 +42,11 @@ SCHEMA = {
         "min_gap_seconds": ("float", (1.0, 3600.0)),
         "detect": ("bool", None),
     },
+    "autosave": {
+        "enabled": ("bool", None),
+        "max_days": ("float", (0.0, 3650.0)),
+        "max_gb": ("float", (0.0, 1_000_000.0)),
+    },
     "retention": {
         "max_days": ("float", (0.0, 3650.0)),
         "max_gb": ("float", (0.0, 1_000_000.0)),
@@ -146,6 +151,8 @@ def current(cfg: Config) -> dict:
         "motion": {"enabled": m.enabled, "sensitivity": m.sensitivity,
                    "min_gap_seconds": m.min_gap_seconds, "detect": m.detect},
         "retention": {"max_days": r.max_days, "max_gb": r.max_gb, "min_free_gb": r.min_free_gb},
+        "autosave": {"enabled": cfg.autosave.enabled, "max_days": cfg.autosave.max_days,
+                     "max_gb": cfg.autosave.max_gb, "before": cfg.autosave.before, "after": cfg.autosave.after},
         "cameras": [{"id": c.id, "name": c.name, "rotation": c.rotation,
                      "motion_sensitivity": c.motion_sensitivity, "push_on": c.push_on} for c in cfg.cameras],
     }
