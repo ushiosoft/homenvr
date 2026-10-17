@@ -272,6 +272,14 @@
   .camblock .ctitle { font-weight:600; margin-bottom:4px; }
 
   /* ---- modal / loading / toast ---- */
+  .zonebox { max-width:min(96vw,1100px); }
+  .zstage { position:relative; display:inline-block; line-height:0; min-width:240px; min-height:120px; }
+  .zstage img { max-width:min(92vw,1080px); max-height:70vh; display:block; border-radius:6px; background:#000; }
+  .zstage svg { position:absolute; inset:0; width:100%; height:100%; cursor:crosshair; }
+  .zstage .mspin { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; }
+  .zone { fill:rgba(248,113,113,.32); stroke:#f87171; stroke-width:2px; vector-effect:non-scaling-stroke; }
+  .zcur { fill:rgba(96,165,250,.18); stroke:#60a5fa; stroke-width:2px; vector-effect:non-scaling-stroke; stroke-dasharray:6 4; }
+  .zpt { fill:#60a5fa; } .zpt.first { fill:#fff; }
   .cfgtext { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:12px/1.5 var(--mono); max-height:420px; overflow:auto; white-space:pre; margin:10px 0; }
   .envtable { display:grid; grid-template-columns:max-content 1fr; gap:2px 16px; font-size:12px; margin-top:8px; }
   .envtable .k { color:var(--muted); }
@@ -1822,7 +1830,7 @@ async function renderSettings() {
       <p class="hint">Read-only: what homenvr started with — <span class="mono" id="sc_path">config.yml</span> and the environment from <span class="mono">.env</span>. Secrets are masked. Changes there are made on the server and apply after a restart.</p>
       <div id="sc_env" class="envtable"></div>
       <pre class="cfgtext" id="sc_cfg">Loading…</pre>
-      <div class="frow"><button class="btn" id="s_restart">Restart homenvr</button><span class="sub" id="s_rsmsg">Recording pauses for ~20 s while it restarts.</span></div>
+      <div class="frow"><button class="btn" id="s_restart">Restart homenvr</button><span class="sub" id="s_rsmsg">Recording pauses for ~10 s while it restarts.</span></div>
     </div>`;
   const syncNotifierFields = () => {
     const n = $('#s_notifier').value;
@@ -1856,7 +1864,7 @@ async function renderSettings() {
     $('#sc_env').innerHTML = sc.env.map(e => `<span class="mono k">${esc(e.key)}</span><span class="mono">${esc(e.value)}</span>`).join('');
   }).catch(() => { $('#sc_cfg').textContent = 'Failed to load.'; });
   $('#s_restart').onclick = async () => {
-    if (!confirm('Restart homenvr now? Recording and live view pause for ~20 s.')) return;
+    if (!confirm('Restart homenvr now? Recording and live view pause for ~10 s.')) return;
     const msg = $('#s_rsmsg'), btn = $('#s_restart');
     btn.disabled = true; msg.textContent = 'Restarting…';
     try { await post('api/restart', {}); } catch (e) { msg.textContent = 'Restart failed: ' + e.message; btn.disabled = false; return; }
@@ -1881,12 +1889,15 @@ async function renderSettings() {
       <div class="frow"><label>Rotation</label><select class="c_rot">${rotOpts}</select></div>
       <div class="frow"><label>Push when</label><select class="c_pushon"><option value="">Use global (${esc((PUSH_ON_OPTS.find(o => o[0] === (a.push_on || 'person')) || [, ''])[1])})</option>
         ${PUSH_ON_OPTS.map(([v, l]) => `<option value="${v}"${v === c.push_on ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="frow"><label>Ignore zones</label><button class="btn c_zones">${c.zones && c.zones.length ? `Edit ${c.zones.length} zone${c.zones.length > 1 ? 's' : ''}` : 'Draw zones'}</button>
+        <span class="sub">areas where motion and people/vehicles don't count (e.g. the street)</span></div>
       <div class="frow"><label>Motion sensitivity</label>
         <input class="c_sens" type="range" min="1" max="20" step="0.5" value="${sensVal}" ${useGlobal ? 'disabled' : ''}>
         <span class="rangeval c_sens_v">${useGlobal ? 'global' : sensVal}</span></div>
       <div class="rangehint"><span>◀ more sensitive</span><span>less ▶</span></div>
       <div class="frow"><label></label><label class="chk"><input type="checkbox" class="c_global" ${useGlobal ? 'checked' : ''}> use global sensitivity (${gsens})</label></div>
       <div class="frow"><label></label><button class="btn c_save">Save</button><span class="saved c_msg"></span></div>`;
+    b.querySelector('.c_zones').onclick = () => editZones(c, () => renderSettings());
     const sens = b.querySelector('.c_sens'), sv = b.querySelector('.c_sens_v'), gl = b.querySelector('.c_global');
     sens.oninput = () => { sv.textContent = sens.value; };
     gl.onchange = () => { sens.disabled = gl.checked; sv.textContent = gl.checked ? 'global' : sens.value; };
@@ -1897,6 +1908,56 @@ async function renderSettings() {
       .then(() => { camRot[c.id] = +b.querySelector('.c_rot').value; const cam = camById(c.id); if (cam) cam.name = b.querySelector('.c_name').value; });
     cs.appendChild(b);
   }
+}
+
+// ---------------------------------------------------------------- ignore-zone editor
+// Polygons over a fresh snapshot (as displayed, i.e. rotated), in 0-1 coordinates.
+function editZones(c, done) {
+  let zones = (c.zones || []).map(z => z.map(p => [...p])), cur = [];
+  const m = document.createElement('div'); m.id = 'modal';
+  m.innerHTML = `<div class="box zonebox">
+    <p class="hint" style="margin:0 0 8px"><b>${esc(c.name)} · ignore zones.</b> Click to place points around an area to ignore (the street, beyond the gate); click the first point or <i>Close zone</i> to finish. A person or vehicle counts only if where they stand — the bottom of their box — is outside every zone. Motion inside a zone makes no events. Right-click a zone to delete it.</p>
+    <div class="zstage"><img alt="snapshot" id="z_img"><svg id="z_svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg><div class="mspin" id="z_spin"><div class="spinner"></div></div></div>
+    <div class="mbar"><button class="btn" id="z_close">Close zone</button><button class="btn" id="z_undo">Undo point</button><button class="btn" id="z_clear">Clear all</button>
+      <span class="sub" id="z_info" style="flex:1"></span><button class="btn" id="z_cancel">Cancel</button><button class="btn keep" id="z_save">Save</button></div></div>`;
+  document.body.appendChild(m);
+  const img = m.querySelector('#z_img'), svg = m.querySelector('#z_svg');
+  img.onload = () => m.querySelector('#z_spin').remove();
+  img.onerror = () => { m.querySelector('#z_spin').innerHTML = '<p class="hint">Snapshot failed — the camera may be offline.</p>'; };
+  img.src = `api/cameras/${c.id}/snapshot?t=${Date.now()}`;
+  const pts = z => z.map(p => p.join(',')).join(' ');
+  const draw = () => {
+    const r = img.getBoundingClientRect(), dot = 6 / Math.max(1, r.width);   // ~6 px dots whatever the size
+    svg.innerHTML = zones.map((z, i) => `<polygon class="zone" points="${pts(z)}"><title>Zone ${i + 1}</title></polygon>`).join('') +
+      (cur.length ? `<polyline class="zcur" points="${pts(cur)}"></polyline>` : '') +
+      cur.map(([x, y], i) => `<ellipse class="zpt${i === 0 ? ' first' : ''}" cx="${x}" cy="${y}" rx="${dot}" ry="${dot * r.width / Math.max(1, r.height)}"></ellipse>`).join('');
+    m.querySelector('#z_info').textContent = `${zones.length} zone${zones.length === 1 ? '' : 's'}${cur.length ? ` · drawing (${cur.length} point${cur.length > 1 ? 's' : ''})` : ''}`;
+  };
+  const closeCur = () => { if (cur.length >= 3) { zones.push(cur); cur = []; draw(); } else if (cur.length) toast('A zone needs at least 3 points.'); };
+  svg.addEventListener('click', e => {
+    const r = svg.getBoundingClientRect();
+    const x = +clamp((e.clientX - r.left) / r.width, 0, 1).toFixed(4), y = +clamp((e.clientY - r.top) / r.height, 0, 1).toFixed(4);
+    if (cur.length >= 3 && Math.hypot((x - cur[0][0]) * r.width, (y - cur[0][1]) * r.height) < 14) { closeCur(); return; }
+    if (zones.length >= 8 && !cur.length) { toast('At most 8 zones.'); return; }
+    cur.push([x, y]); draw();
+  });
+  svg.addEventListener('contextmenu', e => {   // right-click a zone to delete it
+    const poly = e.target.closest('polygon'); if (!poly) return;
+    e.preventDefault(); zones.splice([...svg.querySelectorAll('polygon')].indexOf(poly), 1); draw();
+  });
+  m.querySelector('#z_close').onclick = closeCur;
+  m.querySelector('#z_undo').onclick = () => { if (cur.length) cur.pop(); else zones.pop(); draw(); };
+  m.querySelector('#z_clear').onclick = () => { zones = []; cur = []; draw(); };
+  const close = () => { removeEventListener('resize', draw); m.remove(); };
+  m.querySelector('#z_cancel').onclick = close;
+  m.querySelector('#z_save').onclick = async () => {
+    if (cur.length >= 3) zones.push(cur);
+    try { await post('api/config', { cameras: { [c.id]: { zones } } }); toast(`${c.name}: ${zones.length} ignore zone${zones.length === 1 ? '' : 's'} saved — applies to new motion.`); close(); done && done(); }
+    catch (e) { toast('Save failed: ' + e.message); }
+  };
+  addEventListener('resize', draw);
+  img.addEventListener('load', draw);
+  draw();
 }
 
 // ---------------------------------------------------------------- tabs + boot

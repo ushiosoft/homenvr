@@ -85,18 +85,18 @@ class ObjectDetector:
 
     # ---- single image -------------------------------------------------------
 
-    def detect(self, jpeg: bytes) -> list[str]:
+    def detect(self, jpeg: bytes, zones=None) -> list[str]:
         """Return the categories present ('person' and/or 'vehicle'), highest-conf first."""
-        best = self.scores(jpeg)
+        best = self.scores(jpeg, zones)
         return [c for c in sorted(best, key=best.get, reverse=True) if best[c] > 0]
 
-    def scores(self, jpeg: bytes) -> dict[str, float]:
+    def scores(self, jpeg: bytes, zones=None) -> dict[str, float]:
         """Best confidence per category ({'person': 0.82, 'vehicle': 0.0}); 0 = not seen."""
         best = {c: 0.0 for c in CATS}
         img = self._decode(jpeg)
         if img is None:
             return best
-        for cat, conf, _box in self.boxes(img):
+        for cat, conf, _box in self.kept_boxes(img, zones):
             best[cat] = max(best[cat], conf)
         return best
 
@@ -106,9 +106,18 @@ class ObjectDetector:
             return []
         return self._yolox(img) if self.backend == "yolox" else self._mobilenet(img)
 
+    def kept_boxes(self, img, zones=None) -> list[tuple[str, float, tuple[int, int, int, int]]]:
+        """boxes() minus detections standing in one of the camera's ignore zones."""
+        found = self.boxes(img)
+        if zones and found:
+            from .zones import ignored
+            h, w = img.shape[:2]
+            found = [d for d in found if not ignored(d[2], w, h, zones)]
+        return found
+
     # ---- motion event burst ---------------------------------------------------
 
-    def analyze_burst(self, jpegs: list[bytes]) -> tuple[list[dict[str, float]], list[str]]:
+    def analyze_burst(self, jpegs: list[bytes], zones=None) -> tuple[list[dict[str, float]], list[str]]:
         """Per-frame best *moving* confidence per category, plus the event's labels.
 
         A detection counts only if its box overlaps pixels that changed against the
@@ -122,7 +131,7 @@ class ObjectDetector:
             return [dict(empty) for _ in jpegs], []
         imgs = [self._decode(j) for j in jpegs]
         masks = motion_masks(imgs, self._cv2, self._np)
-        dets = [self.boxes(img) for img in imgs]
+        dets = [self.kept_boxes(img, zones) for img in imgs]
         scores = []
         for k, (mask, frame_dets) in enumerate(zip(masks, dets)):
             best = dict(empty)

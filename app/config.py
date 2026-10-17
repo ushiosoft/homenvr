@@ -65,6 +65,7 @@ class Camera:
     rotation: int = 0  # display rotation in degrees: 0/90/180/270
     motion_sensitivity: float = 0.0  # per-camera override of motion.sensitivity (0 = use global)
     push_on: str = ""  # per-camera override of alerts.push_on ("" = use global)
+    zones: list = field(default_factory=list)  # ignore zones: normalized polygons (app/zones.py)
 
 
 @dataclass
@@ -183,6 +184,7 @@ def parse(raw: dict) -> Config:
                 rotation=int(c.get("rotation", 0)),
                 motion_sensitivity=float(c.get("motion_sensitivity", 0) or 0),
                 push_on=str(c.get("push_on", "") or ""),
+                zones=list(c.get("zones") or []),
             )
         )
 

@@ -558,6 +558,9 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         except ValueError as e:
             raise HTTPException(400, str(e))
         sup.reload_notifier()  # apply alert changes live
+        for cam_id, fields in (patch.get("cameras") or {}).items():
+            if isinstance(fields, dict) and ("zones" in fields or "rotation" in fields) and cam_id in sup.motion:
+                sup.motion[cam_id].restart()  # rebuild its motion mask
         return {"settings": result}
 
     @app.get("/api/cameras/{cam_id}/snapshot")

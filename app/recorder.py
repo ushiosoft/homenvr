@@ -605,10 +605,10 @@ class Supervisor:
         except Exception as e:
             log.debug("[%s] frame burst failed (%s); single snapshot", cam.id, e)
             img = await snapshot_camera(cam, self.cfg)
-            return img, (await asyncio.to_thread(self.detector.detect, img) if detect else [])
+            return img, (await asyncio.to_thread(self.detector.detect, img, cam.zones) if detect else [])
         if not detect:
             return frames[trigger_index(len(frames))], []
-        scores, labels = await asyncio.to_thread(self.detector.analyze_burst, frames)
+        scores, labels = await asyncio.to_thread(self.detector.analyze_burst, frames, cam.zones)
         i, _ = pick_frame(frames, scores)
         return frames[i], labels
 

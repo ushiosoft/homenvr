@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import time
+from pathlib import Path
 
 from .config import Camera, Config
 from .events import EventStore
@@ -34,14 +35,31 @@ def sensitivity_for(cam: Camera, cfg: Config) -> float:
     return cam.motion_sensitivity if getattr(cam, "motion_sensitivity", 0) else cfg.motion.sensitivity
 
 
-def motion_cmd(cam: Camera, cfg: Config, url: str | None = None) -> list[str]:
-    vf = (f"fps={ANALYZE_FPS},scale={ANALYZE_WIDTH}:-2,"
-          f"tblend=all_mode=difference,signalstats,metadata=print")
-    return [
-        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info",
-        *input_args(url or cam.live_url, cfg.rtsp_transport),
-        "-an", "-vf", vf, "-f", "null", "-",
-    ]
+def analyze_height(width: int | None, height: int | None) -> int:
+    """Height of the analyzed frames (ANALYZE_WIDTH wide, even, aspect kept)."""
+    if not width or not height:
+        return 180
+    return max(2, round(ANALYZE_WIDTH * height / width / 2) * 2)
+
+
+def motion_cmd(cam: Camera, cfg: Config, url: str | None = None, mask: Path | None = None,
+               height: int = 180) -> list[str]:
+    """The analyzer: frame differences at ANALYZE_FPS, scored by their mean brightness.
+    With a mask (the camera's ignore zones, app/zones.py) the difference is multiplied
+    by it first, so changes inside a zone score nothing."""
+    head = [FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info",
+            *input_args(url or cam.live_url, cfg.rtsp_transport)]
+    scale = f"fps={ANALYZE_FPS},scale={ANALYZE_WIDTH}:{height}"
+    if mask is None:
+        return [*head, "-an", "-vf", f"{scale},tblend=all_mode=difference,signalstats,metadata=print",
+                "-f", "null", "-"]
+    # One still image as the second input: blend keeps applying its last frame. The
+    # mask is declared limited-range so its 0/255 survive the conversion to YUV as
+    # they are (otherwise white becomes 235 and every score drops ~8 %).
+    graph = (f"[0:v]{scale},tblend=all_mode=difference[d];"
+             f"[1:v]format=gray,scale=in_range=tv:out_range=tv,format=yuv420p[m];"
+             f"[d][m]blend=all_mode=multiply,signalstats,metadata=print")
+    return [*head, "-i", str(mask), "-an", "-filter_complex", graph, "-f", "null", "-"]
 
 
 class MotionDetector:
@@ -81,12 +99,19 @@ class MotionDetector:
                 # Same source as the live view: go2rtc's restream first, NVR as fallback.
                 if self.ready is not None:
                     await self.ready.wait()
-                url, _info, fallback = await pick_source(sub_sources(self.cam, self.cfg), self.cfg.rtsp_transport)
+                url, info, fallback = await pick_source(sub_sources(self.cam, self.cfg), self.cfg.rtsp_transport)
                 if fallback:
                     log.warning("[%s/motion] go2rtc unavailable; reading the NVR directly for now", self.cam.id)
                     fallback_timer = asyncio.get_running_loop().call_later(
                         FALLBACK_RETRY_SECONDS, lambda: self._proc and self._proc.returncode is None and self._proc.kill())
-                cmd = motion_cmd(self.cam, self.cfg, url)
+                height = analyze_height(info.get("width"), info.get("height"))
+                mask = None
+                if self.cam.zones:
+                    from .zones import motion_mask
+                    mask = await asyncio.to_thread(
+                        motion_mask, self.cam.zones, self.cam.rotation, ANALYZE_WIDTH, height,
+                        Path(self.cfg.live_dir) / f"{self.cam.id}-motion-mask.png")
+                cmd = motion_cmd(self.cam, self.cfg, url, mask, height)
                 log.info("[%s/motion] start: %s", self.cam.id, redact(" ".join(cmd)))
                 self._proc = await asyncio.create_subprocess_exec(
                     *cmd, stdin=asyncio.subprocess.DEVNULL,
@@ -116,6 +141,12 @@ class MotionDetector:
                 backoff = 2.0
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60)
+
+    def restart(self) -> None:
+        """Restart the analyzer (e.g. its zones changed); the run loop starts it again."""
+        p = self._proc
+        if p and p.returncode is None:
+            p.kill()
 
     async def stop(self) -> None:
         self._stopping = True

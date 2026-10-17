@@ -59,6 +59,7 @@ CAMERA_SCHEMA = {
     "rotation": ("enum_int", [0, 90, 180, 270]),
     "motion_sensitivity": ("float", (0.0, 255.0)),
     "push_on": ("enum", [""] + PUSH_ON),  # "" = use the global setting
+    "zones": ("zones", None),
 }
 _SECRET_FIELDS = {"ntfy_url", "webhook_url"}  # telegram.bot_token handled separately
 
@@ -72,6 +73,9 @@ def _coerce(kind, bounds, value):
         return bool(value)
     if kind == "str":
         return str(value)[:64]
+    if kind == "zones":
+        from .zones import validate
+        return validate(value)
     if kind == "url":
         v = str(value or "").strip().rstrip("/")
         if v and not re.fullmatch(r"https?://[^\s/?#]+(/[^\s?#]*)?", v):
@@ -154,7 +158,8 @@ def current(cfg: Config) -> dict:
         "autosave": {"enabled": cfg.autosave.enabled, "max_days": cfg.autosave.max_days,
                      "max_gb": cfg.autosave.max_gb, "before": cfg.autosave.before, "after": cfg.autosave.after},
         "cameras": [{"id": c.id, "name": c.name, "rotation": c.rotation,
-                     "motion_sensitivity": c.motion_sensitivity, "push_on": c.push_on} for c in cfg.cameras],
+                     "motion_sensitivity": c.motion_sensitivity, "push_on": c.push_on,
+                     "zones": c.zones} for c in cfg.cameras],
     }
 
 
