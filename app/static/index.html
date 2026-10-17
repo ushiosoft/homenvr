@@ -337,6 +337,8 @@
     .transport { justify-content:space-between; padding:4px; }
     /* Reviewing: the player stays pinned at the top while the incidents below scroll. */
     body.reviewing .gridcol { position:sticky; top:0; z-index:20; background:var(--bg); margin:-12px -12px 0; padding:12px 12px 8px; box-shadow:0 6px 12px -8px rgba(0,0,0,.8); }
+    /* ... and while pinned over the list, only the essentials: picture + play controls. */
+    body.reviewing.scrolled .transport .right { display:none; }
     .transport .hint, .transport .syncchip, .transport .time { display:none; }
     .transport .right { margin-left:0; width:100%; justify-content:center; }
     aside.incidents { max-height:none; min-width:0; flex-basis:100%; }
@@ -698,7 +700,6 @@ function buildGrid() {
     v.addEventListener('ended', () => onTileEnded(c.id));
     v.addEventListener('error', () => onTileError(c.id));
     v.addEventListener('loadeddata', () => { if (S.mode === 'review' && S.paused && t.state === 'loading') { t.state = 'paused'; setOverlay(c.id, ''); reachTarget(c.id); } });
-    v.addEventListener('progress', () => reachTarget(c.id));
     v.addEventListener('waiting', () => { if (S.mode === 'review' && t.state === 'playing') t.state = 'buffering'; });
     g.appendChild(el);
   }
@@ -864,7 +865,7 @@ function seekAll(T) {
     if ((t.state === 'playing' || t.state === 'buffering' || t.state === 'paused') && off >= 0) {
       for (let i = 0; i < v.buffered.length; i++) if (off >= v.buffered.start(i) && off <= v.buffered.end(i) - 0.3) ok = true;
     }
-    if (ok) { t.target = null; v.currentTime = off; } else loadTile(c.id, T);
+    if (ok) { t.target = null; t.ff = false; v.playbackRate = S.speed; v.currentTime = off; } else loadTile(c.id, T);
   }
   if (dayOf(T) !== S.dayStart) { S.dayStart = dayOf(T); refreshData(); }
   ensureHalfWindow();
@@ -893,7 +894,7 @@ function hevcSupported() {
 }
 async function loadTile(id, T) {
   const t = tiles[id], v = t.video, gen = (t.gen = (t.gen || 0) + 1);
-  t.target = null;
+  t.target = null; t.ff = false;
   t.reloads.push(Date.now()); t.reloads = t.reloads.filter(x => Date.now() - x < 10000);
   if (t.pc || v.srcObject) stopLive(t);  // srcObject would override src
   const cov = covered(id, T);
@@ -945,13 +946,35 @@ function tileTime(id) {
   if (t.target != null) return t.target;   // still on the lead-in before the asked-for time
   return t.start + t.video.currentTime;
 }
-// Skip a direct-play tile from its keyframe lead-in to the exact time asked for.
+// Get a direct-play tile from its keyframe lead-in to the exact time asked for. The
+// stream has no Range support, and seeking in it makes the browser start over, so the
+// lead-in is played through at 16x behind the loading overlay and stopped on the first
+// frame at or past the target (requestVideoFrameCallback; timeupdate where missing).
+const FF_RATE = 16;
 function reachTarget(id) {
-  const t = tiles[id];
-  if (t.target == null || !['playing', 'buffering', 'paused'].includes(t.state)) return;
-  if (t.start + t.video.currentTime >= t.target - 0.1) t.target = null;
-  else if (canSeekTo(t, t.target)) { t.video.currentTime = t.target - t.start; t.target = null; }
-  if (t.target == null) setOverlay(id, '');
+  const t = tiles[id], v = t.video;
+  if (t.target == null || t.ff || !['playing', 'buffering', 'paused'].includes(t.state)) return;
+  const gen = t.gen;
+  const arrived = now => {
+    if (gen !== t.gen || t.target == null) return true;
+    if (t.start + now < t.target - 0.04) return false;
+    t.target = null; t.ff = false;
+    v.playbackRate = S.speed;
+    if (S.paused) v.pause();
+    setOverlay(id, '');
+    return true;
+  };
+  if (arrived(v.currentTime)) return;
+  t.ff = true;
+  v.playbackRate = FF_RATE;
+  if (v.paused) v.play().catch(() => {});
+  if (v.requestVideoFrameCallback) {
+    const step = (_now, meta) => { if (!arrived(meta.mediaTime)) v.requestVideoFrameCallback(step); else t.ff = false; };
+    v.requestVideoFrameCallback(step);
+  } else {
+    const tu = () => { if (arrived(v.currentTime)) { t.ff = false; v.removeEventListener('timeupdate', tu); } };
+    v.addEventListener('timeupdate', tu);
+  }
 }
 function onTilePlaying(id) {
   const t = tiles[id];
@@ -962,9 +985,9 @@ function onTilePlaying(id) {
     t.loadSec = t.loadSec ? (t.loadSec + sec) / 2 : sec;   // smoothed, per camera
   }
   t.state = 'playing';
+  if (!t.ff) t.video.playbackRate = S.speed;
   reachTarget(id);
   if (t.target == null) setOverlay(id, '');
-  t.video.playbackRate = S.speed;
   if (t.direct && t.codec === 'hevc' && !t.checked) {
     // Some browsers report HEVC support but render black frames: check once, fall back.
     t.checked = true;
@@ -1028,8 +1051,8 @@ function syncTick() {
       continue;
     }
     if (t.state === 'loading') continue;
-    reachTarget(c.id);
     withFootage++;
+    if (t.target != null) { reachTarget(c.id); inSync++; continue; }  // still skipping its lead-in
     if (S.paused) { if (!v.paused) v.pause(); t.state = 'paused'; inSync++; continue; }
     if (v.paused && t.state !== 'buffering') v.play().catch(() => {});
     if (t.state === 'paused') t.state = 'playing';
@@ -1869,6 +1892,7 @@ window.addEventListener('hashchange', () => tab(tabFromHash()));
   setInterval(() => { if (S.mode === 'live') renderClock(); }, 1000);
   setInterval(() => { if (isToday() && !$('#cameras').classList.contains('hidden')) refreshData(); }, 20000);
   setInterval(() => loadCameras().catch(() => {}), 30000);
+  addEventListener('scroll', () => document.body.classList.toggle('scrolled', scrollY > 60), { passive: true });
   let wasPhone = isPhone();
   window.addEventListener('resize', () => { if (isPhone() !== wasPhone) { wasPhone = isPhone(); layoutGrid(); renderTimeline(); } });
 })();
