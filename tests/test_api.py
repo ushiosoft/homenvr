@@ -63,4 +63,23 @@ def test_webrtc_signalling(tmp_path, monkeypatch):
         assert r.status_code == 200 and r.text.endswith("answer-for-cam1") and r.headers["content-type"].startswith("application/sdp")
         assert c.post("/api/cameras/cam1/webrtc", content="hello").status_code == 400
         assert c.post("/api/cameras/nope/webrtc", content="v=0").status_code == 404
-    assert webrtc.stream_source(cfg.cameras[0]) == "ffmpeg:rtsp://x/2#video=h264#audio=opus"
+    assert webrtc.stream_source(cfg.cameras[0], "hevc") == "ffmpeg:rtsp://x/2#video=h264#audio=opus"
+    assert webrtc.stream_source(cfg.cameras[0], "h264") == "rtsp://x/2"   # passed through untouched
+
+
+def test_sub_sources_prefer_go2rtc_and_fall_back(monkeypatch):
+    import asyncio
+    from app import recorder
+    cfg = parse({"storage_dir": "/tmp/x", "webrtc_api": "http://go2rtc:1984",
+                 "cameras": [{"id": "cam1", "record_url": "rtsp://nvr/101", "live_url": "rtsp://nvr/102"}]})
+    assert recorder.sub_sources(cfg.cameras[0], cfg) == ["rtsp://go2rtc:8554/cam1", "rtsp://nvr/102"]
+    no_g2r = parse({"storage_dir": "/tmp/x", "cameras": [{"id": "cam1", "record_url": "r", "live_url": "rtsp://nvr/102"}]})
+    assert recorder.sub_sources(no_g2r.cameras[0], no_g2r) == ["rtsp://nvr/102"]
+
+    async def fake_probe(url, transport="tcp", timeout=20):
+        if "go2rtc" in url:
+            raise RuntimeError("connection refused")
+        return {"video": "hevc"}
+    monkeypatch.setattr(recorder, "probe", fake_probe)
+    url, info, fallback = asyncio.run(recorder.pick_source(recorder.sub_sources(cfg.cameras[0], cfg), "tcp"))
+    assert (url, fallback) == ("rtsp://nvr/102", True)

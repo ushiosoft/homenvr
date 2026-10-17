@@ -45,6 +45,9 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     async def lifespan(_app: FastAPI):
         warm = None
         if run_recorders:
+            if go2rtc.enabled:
+                # Before the workers: live view + motion read go2rtc's restreams.
+                await go2rtc.register_all()
             await sup.start()
             if go2rtc.enabled:
                 warm = asyncio.create_task(go2rtc.keep_warm())

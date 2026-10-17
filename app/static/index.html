@@ -899,14 +899,18 @@ async function loadTile(id, T) {
   }
   t.state = 'loading'; t.loadAt = performance.now();
   setOverlay(id, '<span class="spin"></span>Loading recording…');
-  let start = Math.floor(T), direct = useDirect() && !t.forceCompat;
+  // Direct play (original 2K, no server transcode): always for H.264 recordings,
+  // which every browser plays; for H.265 only where the browser can (useDirect).
+  let start = Math.floor(T), direct = $('#quality').value !== 'compat' && !t.forceCompat;
   const dur = clamp(Math.ceil(cov.until - start) + 2, 5, PLAY_WINDOW);
   if (direct) {
     try {
       const k = await api(`api/cameras/${id}/keyframe?ts=${T}`);
       if (gen !== t.gen) return;
-      if (k.codec !== 'hevc' && k.codec !== 'h264') direct = false;
-      start = k.ts;
+      t.codec = k.codec;
+      if (k.codec === 'hevc') direct = useDirect();
+      else if (k.codec !== 'h264') direct = false;
+      if (direct) start = k.ts;
     } catch (e) { if (gen !== t.gen) return; direct = false; }
   }
   t.start = start; t.direct = direct;
@@ -945,7 +949,7 @@ function onTilePlaying(id) {
   }
   t.state = 'playing'; setOverlay(id, '');
   t.video.playbackRate = S.speed;
-  if (t.direct && !t.checked) {
+  if (t.direct && t.codec === 'hevc' && !t.checked) {
     // Some browsers report HEVC support but render black frames: check once, fall back.
     t.checked = true;
     const gen = t.gen;

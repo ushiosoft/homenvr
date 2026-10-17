@@ -13,6 +13,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlparse
 
 from .config import Camera, Config
 from .storage import FFMPEG_PATTERN, Storage
@@ -44,6 +45,39 @@ _TIMEOUT_FLAG = "-timeout" if _ffmpeg_major() >= 5 else "-stimeout"
 
 def socket_timeout_args() -> list[str]:
     return [_TIMEOUT_FLAG, RTSP_TIMEOUT_US]
+
+
+# How long a live/motion worker stays on the NVR fallback before retrying go2rtc.
+FALLBACK_RETRY_SECONDS = 300
+
+
+def sub_sources(cam: Camera, cfg: Config) -> list[str]:
+    """Where to read a camera's sub-stream, in order of preference.
+
+    With the go2rtc sidecar configured, its internal RTSP restream comes first: it
+    already holds one connection per camera (for WebRTC), so live HLS and motion
+    detection share it instead of each opening their own on the NVR (12 -> 6 NVR
+    streams for 3 cameras), and its output is H.264 (passed through or converted
+    once). The NVR's own URL stays as the fallback.
+    """
+    out = []
+    if cfg.webrtc_api:
+        host = urlparse(cfg.webrtc_api).hostname
+        out.append(f"rtsp://{host}:8554/{cam.id}")
+    out.append(cam.live_url)
+    return out
+
+
+async def pick_source(urls: list[str], transport: str) -> tuple[str, dict, bool]:
+    """Probe the URLs in order; return (url, stream info, is_fallback) for the first
+    that answers. Raises the last error if none do."""
+    err: Exception | None = None
+    for i, url in enumerate(urls):
+        try:
+            return url, await probe(url, transport, timeout=15), i > 0
+        except Exception as e:  # noqa: BLE001 - try the next source
+            err = e
+    raise err or RuntimeError("no source")
 
 
 def input_args(url: str, transport: str) -> list[str]:
@@ -330,7 +364,7 @@ HLS_LIST_SIZE = 14   # playlist window (s at 1 s/segment): covers the ~10 s burs
 CAPTURE_AFTER = 4.5  # seconds after a motion trigger to wait before picking its frame
 
 
-def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]:
+def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path, url: str | None = None) -> list[str]:
     # Force a keyframe exactly at every HLS segment boundary so each segment starts
     # with an IDR. Without this, a viewer (or a refresh) that starts mid-GOP shows
     # black until the next keyframe, and can stall there.
@@ -343,7 +377,7 @@ def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path) -> list[str]:
         video = ["-c:v", "copy", *_video_tag(info["video"])]
     return [
         FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "warning",
-        *input_args(cam.live_url, cfg.rtsp_transport),
+        *input_args(url or cam.live_url, cfg.rtsp_transport),
         # Audio (G.711 on these cameras) is transcoded to AAC so the browser can
         # play it; the UI keeps every tile muted until the user turns sound on.
         "-map", "0:v:0", *video, *(_audio_args(cam.audio, info.get("audio")) or ["-an"]),
@@ -387,16 +421,25 @@ class Worker:
     async def run(self) -> None:
         backoff = 2.0
         while not self._stopping:
-            url = self.cam.record_url if self.kind == "record" else self.cam.live_url
             t0 = time.monotonic()
+            fallback_timer = None
             try:
-                info = await probe(url, self.cfg.rtsp_transport)
+                if self.kind == "record":
+                    url = self.cam.record_url  # recording keeps its own direct NVR connection
+                    info = await probe(url, self.cfg.rtsp_transport)
+                else:
+                    url, info, fallback = await pick_source(sub_sources(self.cam, self.cfg), self.cfg.rtsp_transport)
+                    if fallback:
+                        log.warning("[%s/live] go2rtc unavailable; reading the NVR directly for now", self.cam.id)
+                        fallback_timer = asyncio.get_running_loop().call_later(
+                            FALLBACK_RETRY_SECONDS, lambda: self._proc and self._proc.returncode is None and self._proc.kill())
                 self.state.stream = info
                 self.out_dir.mkdir(parents=True, exist_ok=True)
                 if self.kind == "live":
                     for f in self.out_dir.iterdir():  # stale playlist from a previous run
                         f.unlink(missing_ok=True)
-                cmd = (record_cmd if self.kind == "record" else live_cmd)(self.cam, self.cfg, info, self.out_dir)
+                cmd = (record_cmd(self.cam, self.cfg, info, self.out_dir) if self.kind == "record"
+                       else live_cmd(self.cam, self.cfg, info, self.out_dir, url))
                 log.info("[%s/%s] start: %s", self.cam.id, self.kind, redact(" ".join(cmd)))
                 self._proc = await asyncio.create_subprocess_exec(
                     *cmd, stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
@@ -419,6 +462,8 @@ class Worker:
             finally:
                 self.state.running = False
                 self._proc = None
+                if fallback_timer:
+                    fallback_timer.cancel()
             if self._stopping:
                 break
             if time.monotonic() - t0 > 60:

@@ -16,5 +16,10 @@ webrtc:
   # No public STUN servers: LAN and Tailscale need none, and by default go2rtc would
   # contact Google's to learn (and advertise) this home's public IP.
   ice_servers: []
+# H.265 sub-streams are converted with a keyframe every second (go2rtc's default is
+# every 50 frames, ~5 s at 10 fps): homenvr's live HLS copies this output into 1 s
+# segments, and each segment must start on a keyframe.
+ffmpeg:
+  h264: "-c:v libx264 -preset:v superfast -tune:v zerolatency -profile:v high -level:v 4.1 -pix_fmt:v yuv420p -force_key_frames expr:gte(t,n_forced*1)"
 log:
   level: info

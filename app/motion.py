@@ -18,7 +18,7 @@ import time
 
 from .config import Camera, Config
 from .events import EventStore
-from .recorder import FFMPEG, input_args, redact
+from .recorder import FALLBACK_RETRY_SECONDS, FFMPEG, input_args, pick_source, redact, sub_sources
 
 log = logging.getLogger(__name__)
 
@@ -34,12 +34,12 @@ def sensitivity_for(cam: Camera, cfg: Config) -> float:
     return cam.motion_sensitivity if getattr(cam, "motion_sensitivity", 0) else cfg.motion.sensitivity
 
 
-def motion_cmd(cam: Camera, cfg: Config) -> list[str]:
+def motion_cmd(cam: Camera, cfg: Config, url: str | None = None) -> list[str]:
     vf = (f"fps={ANALYZE_FPS},scale={ANALYZE_WIDTH}:-2,"
           f"tblend=all_mode=difference,signalstats,metadata=print")
     return [
         FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info",
-        *input_args(cam.live_url, cfg.rtsp_transport),
+        *input_args(url or cam.live_url, cfg.rtsp_transport),
         "-an", "-vf", vf, "-f", "null", "-",
     ]
 
@@ -74,8 +74,15 @@ class MotionDetector:
         backoff = 2.0
         while not self._stopping:
             t0 = time.monotonic()
+            fallback_timer = None
             try:
-                cmd = motion_cmd(self.cam, self.cfg)
+                # Same source as the live view: go2rtc's restream first, NVR as fallback.
+                url, _info, fallback = await pick_source(sub_sources(self.cam, self.cfg), self.cfg.rtsp_transport)
+                if fallback:
+                    log.warning("[%s/motion] go2rtc unavailable; reading the NVR directly for now", self.cam.id)
+                    fallback_timer = asyncio.get_running_loop().call_later(
+                        FALLBACK_RETRY_SECONDS, lambda: self._proc and self._proc.returncode is None and self._proc.kill())
+                cmd = motion_cmd(self.cam, self.cfg, url)
                 log.info("[%s/motion] start: %s", self.cam.id, redact(" ".join(cmd)))
                 self._proc = await asyncio.create_subprocess_exec(
                     *cmd, stdin=asyncio.subprocess.DEVNULL,
@@ -97,6 +104,8 @@ class MotionDetector:
                 log.error("[%s/motion] %s", self.cam.id, redact(str(e)))
             finally:
                 self._proc = None
+                if fallback_timer:
+                    fallback_timer.cancel()
             if self._stopping:
                 break
             if time.monotonic() - t0 > 60:
