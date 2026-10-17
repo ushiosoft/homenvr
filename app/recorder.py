@@ -517,6 +517,9 @@ class Supervisor:
         self._motion_pushing: set[str] = set()
         self._thumb_floor: dict[str, float] = {}  # per camera: thumbs before this are swept
         self._motion_pending: dict[str, tuple] = {}  # per camera: newest event waiting its turn
+        # Per camera: places that flicker in place every burst (the clock overlay), as
+        # [0-1 box, bursts seen] — boxes there aren't shown (ObjectDetector.analyze).
+        self._fixtures: dict[str, list] = {}
         self.converter = None  # clips.ClipConverter, set by the app: auto-saved clips get a seekable copy
         self.autosaver = None  # clips.AutoSaver, set in start()
         self._tasks: list[asyncio.Task] = []
@@ -626,9 +629,23 @@ class Supervisor:
             return img, (await asyncio.to_thread(self.detector.detect, img, cam.zones) if detect else []), None
         if not detect:
             return frames[trigger_index(len(frames))], [], None
-        scores, labels, boxes = await asyncio.to_thread(self.detector.analyze, frames, cam.zones)
+        known = [f[0] for f in self._fixtures.get(cam.id, []) if f[1] >= 2]
+        scores, labels, boxes, found = await asyncio.to_thread(self.detector.analyze, frames, cam.zones, known)
+        self._remember_fixtures(cam.id, found)
         i, _ = pick_frame(frames, scores)
         return frames[i], labels, {"t0": round(t0, 2), "dt": 0.5, "pick": i, "f": boxes}
+
+    def _remember_fixtures(self, cam_id: str, found: list) -> None:
+        from .detect import iou
+        mem = self._fixtures.setdefault(cam_id, [])
+        for box in found:
+            hit = next((f for f in mem if iou(f[0], box) >= 0.3), None)
+            if hit:
+                hit[1] += 1
+            else:
+                mem.append([box, 1])
+        mem.sort(key=lambda f: -f[1])
+        del mem[12:]
 
     async def start(self) -> None:
         if not shutil.which(FFMPEG):

@@ -133,13 +133,17 @@ class ObjectDetector:
     # ---- motion event burst ---------------------------------------------------
 
     def analyze_burst(self, jpegs: list[bytes], zones=None) -> tuple[list[dict[str, float]], list[str]]:
-        scores, labels, _boxes = self.analyze(jpegs, zones)
+        scores, labels, _boxes, _fixtures = self.analyze(jpegs, zones)
         return scores, labels
 
-    def analyze(self, jpegs: list[bytes], zones=None):
+    def analyze(self, jpegs: list[bytes], zones=None, fixtures=None):
         """analyze_burst() plus, per frame, the boxes worth showing: the detections that
         counted ([category, x1, y1, x2, y2], 0-1 of the frame) and the moving areas no
-        detection explains (["motion", ...]) — what to look at when judging the event."""
+        detection explains (["motion", ...]) — what to look at when judging the event.
+
+        `fixtures`: 0-1 boxes known to flicker in place on this camera (its clock),
+        learned from earlier bursts; small moving areas there are dropped. Returns
+        (scores, labels, boxes, fixtures found in this burst)."""
         """Per-frame best *moving* confidence per category, plus the event's labels.
 
         A detection counts only if its box overlaps pixels that changed against the
@@ -150,7 +154,7 @@ class ObjectDetector:
         """
         empty = {c: 0.0 for c in CATS}
         if not self.ok:
-            return [dict(empty) for _ in jpegs], [], [[] for _ in jpegs]
+            return [dict(empty) for _ in jpegs], [], [[] for _ in jpegs], []
         imgs = [self._decode(j) for j in jpegs]
         masks = motion_masks(imgs, self._cv2, self._np)
         dets = [self.kept_boxes(img, zones) for img in imgs]
@@ -169,18 +173,32 @@ class ObjectDetector:
         blobs = [moving_blobs(mask, self._cv2, self._np, [b for _c, b in kept], zones)
                  for mask, kept in zip(masks, counted)]
         first = next((i for i in imgs if i is not None), None)
-        blobs = drop_fixtures(blobs, first.shape[0] * first.shape[1] if first is not None else None)
+        area = first.shape[0] * first.shape[1] if first is not None else None
+        kept_blobs = drop_fixtures(blobs, area)
+        found = []   # this burst's fixtures, for the caller to remember
+        if first is not None:
+            fh, fw = first.shape[:2]
+            for fb, kb in zip(blobs, kept_blobs):
+                for b in fb:
+                    nb = _norm(b, fw, fh)
+                    if b not in kb and not any(iou(nb, f) >= 0.3 for f in found):
+                        found.append(nb)
         boxes = []
-        for img, kept, fblobs in zip(imgs, counted, blobs):
+        for img, kept, fblobs in zip(imgs, counted, kept_blobs):
             if img is None:
                 boxes.append([])
                 continue
             h, w = img.shape[:2]
             # Only labels that held up over the burst; a one-frame blip shows as motion.
             fb = [[cat, *_norm(box, w, h)] for cat, box in kept if cat in labels]
-            fb += [["motion", *_norm(b, w, h)] for b in fblobs]
+            for b in fblobs:
+                nb = _norm(b, w, h)
+                small = area and (b[2] - b[0]) * (b[3] - b[1]) < FIXTURE_SMALL * area
+                if small and any(iou(nb, f) >= 0.3 for f in fixtures or []):
+                    continue
+                fb.append(["motion", *nb])
             boxes.append(fb)
-        return scores, labels, boxes
+        return scores, labels, boxes, found
 
     # ---- backends -------------------------------------------------------------
 

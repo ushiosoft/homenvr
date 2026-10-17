@@ -83,7 +83,8 @@
      applyXform), drawn in the video's own pixels, letterboxed like object-fit:contain. */
   .tile svg.boxes { position:absolute; left:0; top:0; width:100%; height:100%; transform-origin:center center; pointer-events:none; z-index:1; overflow:visible; }
   .tile svg.boxes rect { fill:none; stroke-width:2px; vector-effect:non-scaling-stroke; }
-  .tile svg.boxes rect.motion { stroke:#cbd5e1; stroke-dasharray:5 4; opacity:.85; }
+  .tile svg.boxes rect.halo { stroke:rgba(0,0,0,.65); stroke-width:4.5px; }
+  .tile svg.boxes rect.motion { stroke:#f1f5f9; stroke-dasharray:6 3; }
   .tile svg.boxes rect.person { stroke:var(--person); } .tile svg.boxes rect.vehicle { stroke:var(--vehicle); } .tile svg.boxes rect.animal { stroke:var(--animal); }
   .tile svg.boxes text { font:600 11px var(--mono); paint-order:stroke; stroke:#000; stroke-width:3px; }
   .btn.boxbtn[aria-pressed="true"] { border-color:#3b4a63; background:#1c2635; color:#bfdbfe; }
@@ -1105,12 +1106,19 @@ function drawBoxes(id) {
   const W = v.videoWidth, H = v.videoHeight, rot = v._xf.rot || 0;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  // Small subjects (a rabbit across the yard) are a few pixels: draw at least ~18 px.
+  const el = svg.getBoundingClientRect(), scale = Math.min(el.width, el.height) / Math.min(W, H) || 1;
+  const minU = 18 / scale, padU = 3 / scale;
   svg.innerHTML = frame.b.map(([kind, x1, y1, x2, y2]) => {
     const [ax, ay] = unrotate(x1, y1, rot), [bx, by] = unrotate(x2, y2, rot);
-    const X = Math.min(ax, bx) * W, Y = Math.min(ay, by) * H, w = Math.abs(bx - ax) * W, h = Math.abs(by - ay) * H;
+    let X = Math.min(ax, bx) * W - padU, Y = Math.min(ay, by) * H - padU;
+    let w = Math.abs(bx - ax) * W + 2 * padU, h = Math.abs(by - ay) * H + 2 * padU;
+    if (w < minU) { X -= (minU - w) / 2; w = minU; }
+    if (h < minU) { Y -= (minU - h) / 2; h = minU; }
     // Labels only when the picture is upright (a rotated tile would show them sideways).
     const lbl = kind !== 'motion' && !rot ? `<text x="${X}" y="${Math.max(12, Y - 4)}" fill="var(--${kind})" style="font-size:${Math.round(H / 40)}px">${kind}</text>` : '';
-    return `<rect class="${kind}" x="${X}" y="${Y}" width="${w}" height="${h}"></rect>${lbl}`;
+    const geo = `x="${X}" y="${Y}" width="${w}" height="${h}"`;
+    return `<rect class="halo" ${geo}></rect><rect class="${kind}" ${geo}></rect>${lbl}`;
   }).join('');
 }
 $('#boxbtn').setAttribute('aria-pressed', showBoxes);

@@ -138,7 +138,7 @@ def test_yolox_garbage_output_does_not_fail():
 
 def test_burst_boxes_show_labels_and_unexplained_motion():
     det = FakeDet()
-    scores, labels, boxes = det.analyze(_frames(mover_from=2))
+    scores, labels, boxes, _f = det.analyze(_frames(mover_from=2))
     assert labels == ["person"] and len(boxes) == 8
     kinds = [{b[0] for b in fb} for fb in boxes]
     assert any("person" in k for k in kinds)
@@ -153,7 +153,7 @@ def test_burst_boxes_show_labels_and_unexplained_motion():
     d = ObjectDetector.__new__(ObjectDetector)
     d.ok, d.confidence, d._cv2, d._np, d.backend = True, 0.45, cv2, np, "fake"
     d.boxes = lambda img: []
-    _s, labels, boxes = d.analyze(_frames(mover_from=2))
+    _s, labels, boxes, _f = d.analyze(_frames(mover_from=2))
     assert labels == [] and any(fb and fb[0][0] == "motion" for fb in boxes)
 
 
@@ -219,3 +219,30 @@ def test_detector_serializes_network_calls():
     ts = [threading.Thread(target=d._yolox, args=(np.zeros((360, 640, 3), np.uint8),)) for _ in range(4)]
     [t.start() for t in ts]; [t.join() for t in ts]
     assert not state["overlap"]
+
+
+def test_learned_fixture_is_dropped_in_later_bursts():
+    """The clock flickers in place; once learned, its occasional boxes in a later burst
+    (too rare to count as a fixture there) are dropped — real movers are not."""
+    import cv2
+    import numpy as np
+    from app.detect import ObjectDetector
+    d = ObjectDetector.__new__(ObjectDetector)
+    d.ok, d.confidence, d._cv2, d._np, d.backend = True, 0.45, cv2, np, "fake"
+    d.boxes = lambda img: []
+
+    def burst(clock_frames, mover=True):
+        out = []
+        for k in range(10):
+            img = np.full((360, 640, 3), 40, np.uint8)
+            if k in clock_frames:
+                img[20:34, 480:492] = (230, 120, 60)[k % 3]         # "digit" flicker
+            if mover:
+                img[200:280, 40 + 48 * k:88 + 48 * k] = 220
+            out.append(cv2.imencode(".jpg", img)[1].tobytes())
+        return out
+    _s, _l, _b, found = d.analyze(burst(range(10)))
+    assert found                                                  # the clock, learned
+    _s, _l, boxes, _f = d.analyze(burst({3, 4}), fixtures=found)
+    flat = [b for fb in boxes for b in fb]
+    assert flat and all(b[2] > 0.3 for b in flat)                 # only the mover (low) remains, no clock (top)
