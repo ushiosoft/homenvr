@@ -42,14 +42,25 @@ and stores recordings on hardware you control.
 - **Push alerts** — ntfy, Discord/Slack webhook, Telegram, or email: health
   alerts (camera stopped recording, disk full) and **photo pushes on motion**,
   filtered by `push_on` (person / person or vehicle / any motion), per camera.
+  With a *Public address* set, each push links to the event (`/?play=<t>&cam=<id>`).
+- **Ignore zones** — per camera, drawn over a snapshot: motion inside them makes
+  no events, and people/vehicles standing in them aren't labelled or pushed
+  (the street beyond the driveway or gate).
+- **Exact seeking** — review starts at the exact second you pick; saved clips
+  play from a seekable copy. Safari/iPhone/iPad get Range-capable files.
 - **Clip export + permanent "saved" clips** — never auto-deleted, with thumbnails
-  and an in-page player.
+  and an in-page player. **Auto-saved clips**: every pushed event keeps a clip
+  of each camera that saw it (10 s before to 30 s after), with their own limits
+  (default 90 days / 50 GB); *Keep* makes one permanent.
 - **Two-stage retention** — footage past your day/size limits moves to a **grace**
   area (reversible), and is hard-deleted only under real disk pressure.
 - **Remote access** — Tailscale sidecar (HTTPS on your tailnet, WebRTC included);
   no cloud, no open ports. See [docs/remote-access.md](docs/remote-access.md).
-- **Settings page** — alerts, push policy, motion sensitivity (global and per
-  camera), retention, camera names/rotation; changes apply live.
+- **Settings page** — alerts, push policy, public address, motion sensitivity
+  (global and per camera), ignore zones, retention, auto-save, camera
+  names/rotation; changes apply live. A read-only *Server configuration* card
+  shows `config.yml` and the `.env` variables (secrets masked), with a
+  *Restart homenvr* button.
 - **SD-card backfill** — import footage already on the NVR before it rotates away.
 
 ## Requirements
@@ -143,6 +154,9 @@ Details of the NVR protocol and the discovery process are in
 | `app/motion.py` / `app/events.py` | motion detection + event store |
 | `app/detect.py` | YOLOX-tiny / MobileNet-SSD person/vehicle labelling |
 | `app/incidents.py` | clustering events into incidents / busy periods |
+| `app/zones.py` | per-camera ignore zones (detection filter + motion mask) |
+| `app/clips.py` | saved clips: keyframe-aligned cuts, seekable copies, auto-save |
+| `app/serverinfo.py` | masked config/env for the Settings page |
 | `app/alerts.py` | notifiers (ntfy/Discord/Telegram/SMTP) + health watchdog |
 | `app/settings.py` | runtime-editable config overlay |
 | `app/main.py` | HTTP API + web UI |
