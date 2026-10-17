@@ -164,7 +164,7 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
 
     @app.get("/api/incidents")
     async def incidents(start: float = Query(...), end: float = Query(...),
-                        filter: str = Query("all", pattern="^(all|person|vehicle)$")):
+                        filter: str = Query("all", pattern="^(all|person|vehicle|animal)$")):
         """Events of all cameras clustered into incidents, newest first, with noisy
         single-camera stretches folded into "busy" periods (see app/incidents.py)."""
         from . import incidents as inc
@@ -207,25 +207,37 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         now = time.time()
         lanes = []
         for c in cfg.cameras:
-            counts, person, vehicle = [0] * nb, [0] * nb, [0] * nb
+            counts, person, vehicle, animal = [0] * nb, [0] * nb, [0] * nb, [0] * nb
             marks = []
             for e in evs:
                 if e["camera"] != c.id:
                     continue
                 i = min(nb - 1, int((e["ts"] - start) // bucket))
                 counts[i] += 1
-                kind = "person" if "person" in e["label"] else "vehicle" if "vehicle" in e["label"] else "motion"
+                kind = next((k for k in ("person", "vehicle", "animal") if k in e["label"]), "motion")
                 if kind == "person":
                     person[i] += 1
                 elif kind == "vehicle":
                     vehicle[i] += 1
+                elif kind == "animal":
+                    animal[i] += 1
                 marks.append([round(e["ts"], 2), kind, e["id"]])
             cov = await asyncio.to_thread(storage.coverage, c.id, start, end, cfg.segment_seconds, now)
             lanes.append({"id": c.id, "name": c.name, "rotation": c.rotation,
-                          "counts": counts, "person": person, "vehicle": vehicle,
+                          "counts": counts, "person": person, "vehicle": vehicle, "animal": animal,
                           "total": len(marks), "events": marks,
                           "coverage": [[round(a, 2), round(b, 2)] for a, b in cov]})
         return {"start": start, "end": end, "bucket": bucket, "now": now, "cameras": lanes}
+
+    @app.get("/api/cameras/{cam_id}/boxes")
+    async def boxes(cam_id: str, start: float = Query(...), end: float = Query(...)):
+        """What moved, for drawing over review playback: the burst frames (2 per second,
+        ~10 s around each event) with their detection and motion boxes."""
+        camera_or_404(cam_id)
+        if end <= start or end - start > 3600:
+            raise HTTPException(400, "bad range")
+        store = event_store()
+        return await asyncio.to_thread(store.box_frames, cam_id, start, end) if store else []
 
     @app.get("/api/events/{event_id}/thumb")
     async def event_thumb(event_id: int):

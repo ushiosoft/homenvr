@@ -12,6 +12,8 @@ def test_categories_mapping():
     from app.detect import COCO_CAT, VOC_CAT
     assert VOC_CAT["person"] == "person" and VOC_CAT["car"] == VOC_CAT["motorbike"] == "vehicle"
     assert COCO_CAT[0] == "person" and {COCO_CAT[i] for i in (1, 2, 3, 5, 7)} == {"vehicle"}
+    # Any animal is one label: bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe.
+    assert {COCO_CAT[i] for i in range(14, 24)} == {"animal"} and VOC_CAT["dog"] == VOC_CAT["bird"] == "animal"
 
 
 def _frames(n=8, w=160, h=90, mover_from=None):
@@ -87,6 +89,8 @@ def test_should_push_policy():
     assert should_push("motion", []) and should_push("motion", ["vehicle"])
     assert should_push("person", ["person"]) and not should_push("person", ["vehicle"]) and not should_push("person", [])
     assert should_push("person_vehicle", ["vehicle"]) and not should_push("person_vehicle", [])
+    assert should_push("person,animal", ["animal"]) and not should_push("person,animal", ["vehicle"])
+    assert should_push("person,vehicle,animal", ["animal"]) and not should_push("person_vehicle", ["animal"])
 
 
 def test_split_jpegs():
@@ -129,3 +133,45 @@ def test_yolox_garbage_output_does_not_fail():
     d._net = Net()
     out = d._yolox(np.zeros((360, 640, 3), np.uint8))
     assert [c for c, _s, _b in out] == ["person"]
+
+
+def test_burst_boxes_show_labels_and_unexplained_motion():
+    det = FakeDet()
+    scores, labels, boxes = det.analyze(_frames(mover_from=2))
+    assert labels == ["person"] and len(boxes) == 8
+    kinds = [{b[0] for b in fb} for fb in boxes]
+    assert any("person" in k for k in kinds)
+    assert not any("vehicle" in k for k in kinds)            # the parked car never shows
+    for fb in boxes:
+        for kind, x1, y1, x2, y2 in fb:
+            assert 0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1
+    # Motion that no detection explains is kept as a "motion" box.
+    import cv2
+    import numpy as np
+    from app.detect import ObjectDetector
+    d = ObjectDetector.__new__(ObjectDetector)
+    d.ok, d.confidence, d._cv2, d._np, d.backend = True, 0.45, cv2, np, "fake"
+    d.boxes = lambda img: []
+    _s, labels, boxes = d.analyze(_frames(mover_from=2))
+    assert labels == [] and any(fb and fb[0][0] == "motion" for fb in boxes)
+
+
+def test_draw_boxes_changes_the_image():
+    import cv2
+    import numpy as np
+    from app.detect import draw_boxes
+    jpg = cv2.imencode(".jpg", np.full((90, 160, 3), 40, np.uint8))[1].tobytes()
+    assert draw_boxes(jpg, []) == jpg
+    out = cv2.imdecode(np.frombuffer(draw_boxes(jpg, [["animal", 0.2, 0.2, 0.6, 0.8]]), np.uint8), 1)
+    assert out[int(0.2 * 90) + 1, int(0.4 * 160)].tolist() != [40, 40, 40]
+
+
+def test_fixed_flicker_is_not_motion():
+    """The camera's clock overlay changes every second at the same place: it must not
+    show as a motion box in every frame, while a mover still does."""
+    from app.detect import drop_fixtures
+    clock = (220, 20, 240, 35)
+    blobs = [[clock] + ([(10 * k, 100, 10 * k + 12, 112)] if k in (3, 5) else []) for k in range(10)]
+    out = drop_fixtures(blobs)
+    assert all(clock not in fb for fb in out)
+    assert out[3] == [(30, 100, 42, 112)] and out[5] == [(50, 100, 62, 112)]

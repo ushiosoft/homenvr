@@ -119,3 +119,14 @@ def test_public_url_setting_and_review_link(tmp_path):
             s.update(cfg, tmp_path / "settings.json", {"alerts": {"public_url": bad}})
     s.update(cfg, tmp_path / "settings.json", {"alerts": {"public_url": ""}})   # clearing is allowed
     assert cfg.alerts.public_url == ""
+
+
+def test_push_on_accepts_category_lists(tmp_path):
+    cfg = mkcfg(tmp_path)
+    s.update(cfg, tmp_path / "settings.json", {"alerts": {"push_on": "person,animal"},
+                                               "cameras": {"cam1": {"push_on": "person,vehicle,animal"}}})
+    assert cfg.alerts.push_on == "person,animal" and cfg.cameras[0].push_on == "person,vehicle,animal"
+    s.update(cfg, tmp_path / "settings.json", {"cameras": {"cam1": {"push_on": ""}}})
+    for bad in ("cats", "person,cats", ""):
+        with pytest.raises(ValueError):
+            s.update(cfg, tmp_path / "settings.json", {"alerts": {"push_on": bad}})

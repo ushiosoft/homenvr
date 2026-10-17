@@ -65,7 +65,7 @@ def test_newest_first_and_counts():
     out = inc.build(noisy_day(), THR, NAMES)
     starts = [i["start"] for i in out["items"]]
     assert starts == sorted(starts, reverse=True)
-    assert out["counts"] == {"all": 3, "person": 1, "vehicle": 1}
+    assert out["counts"] == {"all": 3, "person": 1, "vehicle": 1, "animal": 0}
     assert out["events_per_camera"]["cam3"] == out["folded_events"]
 
 

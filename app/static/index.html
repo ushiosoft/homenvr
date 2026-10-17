@@ -10,7 +10,7 @@
   :root {
     --bg:#0f1115; --panel:#13161b; --panel2:#171a20; --raised:#1d2128; --line:#262b33; --line2:#2a2f38;
     --fg:#e6e8eb; --muted:#9aa3b2; --dim:#7c8594; --accent:#60a5fa; --accent-ink:#0b1220;
-    --motion:#94a3b8; --person:#4ade80; --vehicle:#fbbf24; --head:#f87171; --live:#b91c1c;
+    --motion:#94a3b8; --person:#4ade80; --vehicle:#fbbf24; --animal:#c08bfa; --head:#f87171; --live:#b91c1c;
     --warn-bg:#1a1710; --warn-line:#4a3f22; --warn:#fcd34d; --warn-text:#c7b98a;
     --mono:'IBM Plex Mono', ui-monospace, monospace;
     --lane-label:156px; --lane-gap:12px; --lane-h:68px;
@@ -79,6 +79,14 @@
   .tile.portrait { aspect-ratio:9/16; }
   .camgrid.mix .tile.portrait { grid-row:span 2; aspect-ratio:auto; }
   .tile.sel { outline-color:rgba(96,165,250,.55); }
+  /* Detection/motion boxes over review playback: laid out exactly like the video (see
+     applyXform), drawn in the video's own pixels, letterboxed like object-fit:contain. */
+  .tile svg.boxes { position:absolute; left:0; top:0; width:100%; height:100%; transform-origin:center center; pointer-events:none; z-index:1; overflow:visible; }
+  .tile svg.boxes rect { fill:none; stroke-width:2px; vector-effect:non-scaling-stroke; }
+  .tile svg.boxes rect.motion { stroke:#cbd5e1; stroke-dasharray:5 4; opacity:.85; }
+  .tile svg.boxes rect.person { stroke:var(--person); } .tile svg.boxes rect.vehicle { stroke:var(--vehicle); } .tile svg.boxes rect.animal { stroke:var(--animal); }
+  .tile svg.boxes text { font:600 11px var(--mono); paint-order:stroke; stroke:#000; stroke-width:3px; }
+  .btn.boxbtn[aria-pressed="true"] { border-color:#3b4a63; background:#1c2635; color:#bfdbfe; }
   .tile video { position:absolute; left:0; top:0; width:100%; height:100%; object-fit:contain; display:block; transform-origin:center center; will-change:transform; background:#000; }
   .tile.zoomed video { cursor:grab; touch-action:none; }
   .tile .name { position:absolute; left:10px; top:10px; background:rgba(10,12,15,.72); padding:4px 9px; border-radius:6px; font-size:12px; font-weight:500; z-index:2; pointer-events:none; }
@@ -119,7 +127,7 @@
   .scrub .fill { position:absolute; left:0; top:12px; height:4px; border-radius:2px; background:var(--accent); }
   .scrub .knob { position:absolute; top:7px; width:14px; height:14px; margin-left:-7px; border-radius:50%; background:#fff; box-shadow:0 0 0 3px rgba(96,165,250,.35); }
   .scrub .ticks span { position:absolute; top:6px; width:2px; height:16px; margin-left:-1px; background:var(--motion); opacity:.8; }
-  .scrub .ticks span.person { background:var(--person); } .scrub .ticks span.vehicle { background:var(--vehicle); }
+  .scrub .ticks span.person { background:var(--person); } .scrub .ticks span.vehicle { background:var(--vehicle); } .scrub .ticks span.animal { background:var(--animal); }
   .scrub .lbl { position:absolute; bottom:28px; transform:translateX(-50%); background:var(--head); color:#1a0b0b; font-family:var(--mono); font-size:11px; font-weight:600; padding:1px 6px; border-radius:4px; white-space:nowrap; }
   .syncchip { display:flex; align-items:center; gap:6px; margin-left:10px; padding:5px 10px; border-radius:999px; background:#1d2a1f; color:#86efac; font-size:12px; }
   .syncchip::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--person); }
@@ -152,6 +160,7 @@
   .chip { font-size:11px; padding:2px 8px; border-radius:999px; white-space:nowrap; background:#252b34; color:#cbd5e1; }
   .chip.person { background:rgba(74,222,128,.16); color:var(--person); }
   .chip.vehicle { background:rgba(251,191,36,.16); color:var(--vehicle); }
+  .chip.animal { background:rgba(192,139,250,.16); color:var(--animal); }
   .chip.playing { background:var(--accent); color:var(--accent-ink); font-weight:600; }
   .chip.noise { background:transparent; border:1px dashed #4a3f22; color:var(--warn-text); }
   .icard .row1 .chip.kind { margin-left:auto; }
@@ -194,7 +203,7 @@
   .track { position:relative; flex:1; background:var(--panel2); border-radius:6px; overflow:hidden; }
   .track .bars { position:absolute; inset:6px 0 9px 0; display:flex; align-items:flex-end; gap:1px; }
   .track .bars div { flex:1; background:var(--motion); border-radius:1px 1px 0 0; opacity:.85; }
-  .track .bars div.person { background:var(--person); } .track .bars div.vehicle { background:var(--vehicle); }
+  .track .bars div.person { background:var(--person); } .track .bars div.vehicle { background:var(--vehicle); } .track .bars div.animal { background:var(--animal); }
   .track .cov { position:absolute; bottom:0; height:5px; background:#3b4a63; }
   .track .future { position:absolute; top:0; bottom:0; right:0; background:repeating-linear-gradient(135deg, rgba(255,255,255,.035) 0 6px, transparent 6px 12px); }
   .track .busyband { position:absolute; bottom:5px; height:4px; background:repeating-linear-gradient(90deg, rgba(252,211,77,.7) 0 2px, transparent 2px 5px); }
@@ -202,9 +211,9 @@
   .track .strip img { flex:1; min-width:0; height:100%; object-fit:cover; display:block; opacity:.9; background:#0b0d10; }
   .track .strip .gap { flex:1; background:repeating-linear-gradient(135deg, rgba(255,255,255,.03) 0 6px, transparent 6px 12px); }
   .track .mk { position:absolute; top:0; bottom:0; width:3px; margin-left:-1px; background:var(--motion); }
-  .track .mk.person { background:var(--person); } .track .mk.vehicle { background:var(--vehicle); }
+  .track .mk.person { background:var(--person); } .track .mk.vehicle { background:var(--vehicle); } .track .mk.animal { background:var(--animal); }
   .track .tick { position:absolute; top:0; height:8px; width:2px; margin-left:-1px; }
-  .track .tick.person { background:var(--person); } .track .tick.vehicle { background:var(--vehicle); }
+  .track .tick.person { background:var(--person); } .track .tick.vehicle { background:var(--vehicle); } .track .tick.animal { background:var(--animal); }
   .tl-over { position:absolute; top:-6px; bottom:-4px; left:calc(var(--lane-label) + var(--lane-gap)); right:0; cursor:pointer; touch-action:none; z-index:2; }
   .tl-over .band { position:absolute; top:6px; bottom:4px; background:rgba(96,165,250,.2); border-left:2px solid var(--accent); border-right:2px solid var(--accent); pointer-events:none; }
   .playhead { position:absolute; top:0; bottom:0; width:2px; margin-left:-1px; background:var(--head); pointer-events:none; }
@@ -221,7 +230,7 @@
   .fp-win { flex:999 1 600px; min-width:0; }
   .minitl { position:relative; height:40px; background:var(--panel2); border-radius:6px; margin-top:8px; cursor:pointer; touch-action:none; }
   .minitl .tk { position:absolute; top:6px; bottom:6px; width:4px; margin-left:-2px; border-radius:2px; background:var(--motion); }
-  .minitl .tk.on { background:var(--accent); } .minitl .tk.person { background:var(--person); } .minitl .tk.vehicle { background:var(--vehicle); }
+  .minitl .tk.on { background:var(--accent); } .minitl .tk.person { background:var(--person); } .minitl .tk.vehicle { background:var(--vehicle); } .minitl .tk.animal { background:var(--animal); }
   .minitl .incwin { position:absolute; top:0; bottom:0; background:rgba(96,165,250,.12); border-left:1px dashed #3b4a63; border-right:1px dashed #3b4a63; }
   .minitl .ph { position:absolute; top:-4px; bottom:-4px; width:2px; margin-left:-1px; background:var(--head); pointer-events:none; }
   .miniaxis { position:relative; height:16px; margin-top:4px; color:var(--dim); font-family:var(--mono); font-size:11px; }
@@ -414,6 +423,7 @@
             <label class="sel-lbl">Speed <select id="speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
             <label class="sel-lbl">Quality <select id="quality"><option value="auto">Auto</option><option value="direct">2K direct</option><option value="compat">Compatible</option></select></label>
             <button class="btn soundbtn"></button>
+            <button class="btn boxbtn" id="boxbtn" aria-pressed="true" title="Outline what triggered each event: people, vehicles, animals, and other movement (dashed)">Boxes</button>
             <button class="btn" id="download">Download clip</button>
             <button class="btn keep" id="keep">Keep</button>
           </span>
@@ -451,6 +461,7 @@
         <span><i style="background:var(--motion)"></i>motion</span>
         <span><i style="background:var(--person)"></i>person</span>
         <span><i style="background:var(--vehicle)"></i>vehicle</span>
+        <span><i style="background:var(--animal)"></i>animal</span>
         <span><i style="width:2px;background:var(--head)"></i>playhead</span>
       </span>
     </div>
@@ -596,6 +607,8 @@ function applyXform(video) {
     Object.assign(video.style, { width: '100%', height: '100%', left: '0', top: '0' });
   }
   video.style.transform = `translate(${x.px}px, ${x.py}px) scale(${x.zoom}) rotate(${x.rot}deg)`;
+  const o = wrap.querySelector('svg.boxes');
+  if (o) for (const k of ['width', 'height', 'left', 'top', 'transform']) o.style[k] = video.style[k];
 }
 function clampPan(video) {
   const x = video._xf, wrap = video.parentElement;
@@ -687,7 +700,7 @@ function buildGrid() {
   for (const c of cameras) {
     const el = document.createElement('div');
     el.className = 'tile'; el.dataset.cam = c.id;
-    el.innerHTML = `<video muted playsinline></video>
+    el.innerHTML = `<video muted playsinline></video><svg class="boxes" aria-hidden="true"></svg>
       <span class="name"></span><span class="badge"></span>
       <div class="over hidden"></div><span class="sndbadge">${ICON_SPK_ON}</span>
       <div class="side"></div>
@@ -790,6 +803,7 @@ function goLive() {
     t.video.playbackRate = 1;
     setOverlay(c.id, isWall ? '' : '<span class="spin"></span>Switching to live…');
     startLive(c);
+    drawBoxes(c.id);   // clears them
   }
   renderAll();
 }
@@ -945,6 +959,7 @@ async function loadTile(id, T) {
                   : `api/cameras/${id}/playback.mp4?start=${start.toFixed(3)}&dur=${dur}&height=${t.height}`) + (RANGED ? '&file=1' : '');
   v.muted = !(S.sound && id === S.selCam);
   v.playbackRate = S.speed;
+  loadBoxes(id, T);
   // Direct play (stream copy) has to start at the keyframe before T — up to a few
   // seconds early. t.target makes the tile skip ahead to T as soon as that part has
   // arrived (copied streams arrive much faster than real time); see reachTarget.
@@ -1055,6 +1070,57 @@ function masterCam() {
   return cameras.map(c => c.id).find(ok) || null;
 }
 
+// ---- detection boxes over review playback
+// Each event stores its ~10 s burst (2 frames/s) of boxes in display (rotated)
+// coordinates; the tile shows the burst frame nearest its playback time.
+const boxCache = {};   // camId -> { a, b, at, frames: [{t, b}] }
+let showBoxes = true;
+try { showBoxes = localStorage.getItem('boxes') !== '0'; } catch {}
+async function loadBoxes(id, T) {
+  const c = boxCache[id], now = nowS();
+  if (c && T >= c.a && T < c.b - 20 && !(c.b > now - 60 && Date.now() - c.at > 20000)) return;
+  if (c && c.pending) return;
+  const a = T - 60, b = Math.min(T + 600, now + 60);
+  boxCache[id] = { ...(c || { frames: [] }), pending: true };
+  try { boxCache[id] = { a, b, at: Date.now(), frames: await api(`api/cameras/${id}/boxes?start=${a}&end=${b}`) }; }
+  catch { boxCache[id] = { a, b, at: Date.now(), frames: [] }; }
+}
+// A display-space (rotated) 0-1 point -> the unrotated video's 0-1 point.
+function unrotate(u, v, rot) {
+  return rot === 90 ? [v, 1 - u] : rot === 180 ? [1 - u, 1 - v] : rot === 270 ? [1 - v, u] : [u, v];
+}
+function drawBoxes(id) {
+  const t = tiles[id], svg = t.el.querySelector('svg.boxes'), v = t.video;
+  const T = S.mode === 'review' && showBoxes ? tileTime(id) : null;
+  let frame = null;
+  if (T != null && boxCache[id]) {
+    let best = 0.6;
+    for (const f of boxCache[id].frames) { const d = Math.abs(f.t - T); if (d < best) { best = d; frame = f; } }
+    if (T >= boxCache[id].b - 20 || T < boxCache[id].a) loadBoxes(id, T);
+  }
+  const key = frame && v.videoWidth ? frame.t + '|' + v._xf.rot + '|' + v.videoWidth : '';
+  if (key === t.boxKey) return;
+  t.boxKey = key;
+  if (!key) { svg.innerHTML = ''; return; }
+  const W = v.videoWidth, H = v.videoHeight, rot = v._xf.rot || 0;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  svg.innerHTML = frame.b.map(([kind, x1, y1, x2, y2]) => {
+    const [ax, ay] = unrotate(x1, y1, rot), [bx, by] = unrotate(x2, y2, rot);
+    const X = Math.min(ax, bx) * W, Y = Math.min(ay, by) * H, w = Math.abs(bx - ax) * W, h = Math.abs(by - ay) * H;
+    // Labels only when the picture is upright (a rotated tile would show them sideways).
+    const lbl = kind !== 'motion' && !rot ? `<text x="${X}" y="${Math.max(12, Y - 4)}" fill="var(--${kind})" style="font-size:${Math.round(H / 40)}px">${kind}</text>` : '';
+    return `<rect class="${kind}" x="${X}" y="${Y}" width="${w}" height="${h}"></rect>${lbl}`;
+  }).join('');
+}
+$('#boxbtn').setAttribute('aria-pressed', showBoxes);
+$('#boxbtn').onclick = () => {
+  showBoxes = !showBoxes;
+  try { localStorage.setItem('boxes', showBoxes ? '1' : '0'); } catch {}
+  $('#boxbtn').setAttribute('aria-pressed', showBoxes);
+  for (const c of cameras) drawBoxes(c.id);
+};
+
 // The sync loop: one master clock (the selected camera when it has footage); the others
 // are nudged with playbackRate when they drift > 0.5 s and reloaded when far off.
 let lastInside = null;
@@ -1105,7 +1171,7 @@ function syncTick() {
   if (loading) { chip.className = 'syncchip wait'; chip.textContent = `loading ${loading} camera${loading > 1 ? 's' : ''}…`; }
   else if (inSync === withFootage) { chip.className = 'syncchip'; chip.textContent = withFootage === cameras.length ? `${withFootage} cameras in sync` : `${withFootage} of ${cameras.length} cameras have footage`; }
   else { chip.className = 'syncchip wait'; chip.textContent = 'syncing…'; }
-  for (const c of cameras) setBadge(c.id);
+  for (const c of cameras) { setBadge(c.id); drawBoxes(c.id); }
   renderClock();
 }
 
@@ -1200,7 +1266,7 @@ function renderToolbar() {
   $('#revpill').classList.toggle('hidden', live);
   $('#golive').classList.toggle('hidden', live);
   const c = S.inc ? S.inc.counts : { all: 0, person: 0, vehicle: 0 };
-  const defs = [['all', 'All motion'], ['person', 'People'], ['vehicle', 'Vehicles']];
+  const defs = [['all', 'All motion'], ['person', 'People'], ['vehicle', 'Vehicles'], ['animal', 'Animals']];
   $('#filters').innerHTML = defs.map(([k, l]) =>
     `<button data-f="${k}" class="${S.filter === k ? 'on' : ''}" aria-pressed="${S.filter === k}">${l}<span class="n">${c[k] ?? 0}</span></button>`).join('');
   $('#filters').querySelectorAll('button').forEach(b => b.onclick = () => { S.filter = b.dataset.f; refreshData(); });
@@ -1282,6 +1348,7 @@ function observeImgs(root) {
 function labelChip(labels) {
   if (labels.includes('person')) return '<span class="chip person kind">person</span>';
   if (labels.includes('vehicle')) return '<span class="chip vehicle kind">vehicle</span>';
+  if (labels.includes('animal')) return '<span class="chip animal kind">animal</span>';
   return '<span class="chip kind">motion</span>';
 }
 function renderIncidents() {
@@ -1407,7 +1474,7 @@ function renderTimeline() {
     if (S.zoom === 'day') {
       const max = Math.max(1, ...l.counts);
       inner += '<div class="bars">' + l.counts.map((n, i) => {
-        const cls = l.person[i] ? 'person' : l.vehicle[i] ? 'vehicle' : '';
+        const cls = l.person[i] ? 'person' : l.vehicle[i] ? 'vehicle' : (l.animal || [])[i] ? 'animal' : '';
         return `<div class="${cls}" style="height:${n ? Math.max(12, Math.round(n / max * 100)) : 0}%" title="${n} events"></div>`;
       }).join('') + '</div>';
       for (const [a, b] of l.coverage) inner += `<div class="cov" style="left:${pct(frac(a))};width:${pct(frac(b) - frac(a))}"></div>`;
@@ -1790,7 +1857,9 @@ function playSaved(c) {
 }
 
 // ---------------------------------------------------------------- settings
-const PUSH_ON_OPTS = [['person', 'A person is detected'], ['person_vehicle', 'A person or moving vehicle is detected'], ['motion', 'Any motion (every event)']];
+const PUSH_ON_OPTS = [['person', 'A person is detected'], ['person_vehicle', 'A person or moving vehicle is detected'],
+  ['person,animal', 'A person or an animal is detected'], ['person,vehicle,animal', 'A person, moving vehicle or animal is detected'],
+  ['motion', 'Any motion (every event)']];
 async function renderSettings() {
   const root = $('#settings');
   root.innerHTML = '<p class="hint">Loading…</p>';

@@ -22,7 +22,8 @@ from .config import Config
 
 MASK = "••••••••"
 
-PUSH_ON = ["person", "person_vehicle", "motion"]
+# alerts.push_on: "motion", or a comma list of the labels that push (app.recorder.should_push).
+PUSH_ON = ["person", "person_vehicle", "person,animal", "person,vehicle,animal", "motion"]
 
 # Which config fields the settings page may change, and their types.
 SCHEMA = {
@@ -34,7 +35,7 @@ SCHEMA = {
         "stale_segment_seconds": ("int", (10, 86400)),
         "motion_push": ("bool", None),
         "motion_push_cooldown": ("int", (10, 86400)),
-        "push_on": ("enum", PUSH_ON),
+        "push_on": ("push_on", None),
         "public_url": ("url", None),
     },
     "motion": {
@@ -58,7 +59,7 @@ CAMERA_SCHEMA = {
     "name": ("str", None),
     "rotation": ("enum_int", [0, 90, 180, 270]),
     "motion_sensitivity": ("float", (0.0, 255.0)),
-    "push_on": ("enum", [""] + PUSH_ON),  # "" = use the global setting
+    "push_on": ("push_on_cam", None),  # "" = use the global setting
     "zones": ("zones", None),
 }
 _SECRET_FIELDS = {"ntfy_url", "webhook_url"}  # telegram.bot_token handled separately
@@ -73,6 +74,14 @@ def _coerce(kind, bounds, value):
         return bool(value)
     if kind == "str":
         return str(value)[:64]
+    if kind in ("push_on", "push_on_cam"):
+        v = str(value or "").strip()
+        if kind == "push_on_cam" and v == "":
+            return v
+        cats = set(v.replace("person_vehicle", "person,vehicle").split(","))
+        if v != "motion" and (not cats or not cats <= {"person", "vehicle", "animal"}):
+            raise ValueError("must be \"motion\" or a comma list of person, vehicle, animal")
+        return v
     if kind == "zones":
         from .zones import validate
         return validate(value)

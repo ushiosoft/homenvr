@@ -41,6 +41,8 @@ class EventStore:
                 c.execute("ALTER TABLE events ADD COLUMN label TEXT DEFAULT ''")
             if "dismissed" not in cols:  # "Mark as false alarm" from the UI
                 c.execute("ALTER TABLE events ADD COLUMN dismissed INTEGER DEFAULT 0")
+            if "boxes" not in cols:  # what moved, per burst frame (JSON; see Supervisor._capture_event)
+                c.execute("ALTER TABLE events ADD COLUMN boxes TEXT")
             c.execute("CREATE INDEX IF NOT EXISTS idx_ts ON events(ts)")
 
     def add(self, camera: str, ts: float, type: str = "motion", score: float = 0.0) -> int:
@@ -48,6 +50,32 @@ class EventStore:
             cur = c.execute("INSERT INTO events(camera, ts, type, score) VALUES (?,?,?,?)",
                             (camera, ts, type, score))
             return cur.lastrowid
+
+    def set_boxes(self, event_id: int, boxes: dict) -> None:
+        import json
+        with self._conn() as c:
+            c.execute("UPDATE events SET boxes=? WHERE id=?", (json.dumps(boxes, separators=(",", ":")), event_id))
+
+    def box_frames(self, camera: str, start: float, end: float) -> list[dict]:
+        """Burst frames with boxes for one camera between start and end, oldest first:
+        [{"t": wall-clock time, "b": [[kind, x1, y1, x2, y2], ...]}, ...]. Bursts reach
+        ~10 s past their event, so events a little before `start` are looked at too."""
+        import json
+        with self._conn() as c:
+            rows = c.execute("SELECT boxes FROM events WHERE camera=? AND ts>=? AND ts<? AND boxes IS NOT NULL "
+                             "AND COALESCE(dismissed,0)=0 ORDER BY ts", (camera, start - 15, end + 15)).fetchall()
+        out = []
+        for (raw,) in rows:
+            try:
+                doc = json.loads(raw)
+            except ValueError:
+                continue
+            for k, b in enumerate(doc.get("f") or []):
+                t = doc["t0"] + k * doc["dt"]
+                if b and start <= t < end:
+                    out.append({"t": round(t, 2), "b": b})
+        out.sort(key=lambda f: f["t"])
+        return out
 
     def set_label(self, event_id: int, label: str) -> None:
         with self._conn() as c:

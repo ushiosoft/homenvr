@@ -121,7 +121,7 @@ def build(events: list[dict], thresholds: dict[str, float], names: dict[str, str
           label_filter: str = "all") -> dict:
     """Cluster events into incidents + busy periods, newest first.
 
-    label_filter: "all", "person" or "vehicle". Busy periods only appear under "all"
+    label_filter: "all", "person", "vehicle" or "animal". Busy periods only appear under "all"
     (they are unlabeled by definition). Counts are always for all three filters.
     """
     names = names or {}
@@ -156,8 +156,9 @@ def build(events: list[dict], thresholds: dict[str, float], names: dict[str, str
 
     counts = {"all": len(incidents),
               "person": sum("person" in i["labels"] for i in incidents),
-              "vehicle": sum("vehicle" in i["labels"] for i in incidents)}
-    if label_filter in ("person", "vehicle"):
+              "vehicle": sum("vehicle" in i["labels"] for i in incidents),
+              "animal": sum("animal" in i["labels"] for i in incidents)}
+    if label_filter in ("person", "vehicle", "animal"):
         items = [i for i in incidents if label_filter in i["labels"]]
     else:
         items = incidents + busy_items

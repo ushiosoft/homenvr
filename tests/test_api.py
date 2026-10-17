@@ -153,3 +153,15 @@ def test_go2rtc_delete_of_unsaved_stream_is_success(monkeypatch):
         raise urllib.error.HTTPError(req.full_url, 500, "x", {}, io.BytesIO(b"yaml: path not exist"))
     monkeypatch.setattr(webrtc.urllib.request, "urlopen", fake_urlopen)
     webrtc.Go2rtc(cfg)._call("DELETE", "/api/streams?src=cam1")   # no raise
+
+
+def test_box_frames_api(tmp_path):
+    from app.events import EventStore
+    with client(tmp_path) as c:
+        st = EventStore(tmp_path / "rec" / "events.db")
+        eid = st.add("cam1", 1000.0, "motion", 5.0)
+        st.set_boxes(eid, {"t0": 994.0, "dt": 0.5, "pick": 2, "f": [[], [["animal", 0.1, 0.2, 0.3, 0.4]], [["motion", 0, 0, 0.1, 0.1]]]})
+        r = c.get("/api/cameras/cam1/boxes", params={"start": 990, "end": 1010}).json()
+        assert r == [{"t": 994.5, "b": [["animal", 0.1, 0.2, 0.3, 0.4]]}, {"t": 995.0, "b": [["motion", 0, 0, 0.1, 0.1]]}]
+        assert c.get("/api/cameras/cam1/boxes", params={"start": 995.2, "end": 1010}).json() == []
+        assert c.get("/api/incidents", params={"start": 0, "end": 5000, "filter": "animal"}).status_code == 200

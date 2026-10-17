@@ -195,11 +195,15 @@ async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: f
 
 
 async def live_frames(live_dir, cam_id: str, since: float, max_segments: int = 3, fps: float = 2,
-                      width: int = 640, timeout: float = 20, rot: int = 0) -> list[bytes]:
+                      width: int = 640, timeout: float = 20, rot: int = 0, with_start: bool = False):
     """JPEG frames (fps per second) from the live segments finished at or after the
-    wall-clock time `since` (at most max_segments of them), oldest first."""
+    wall-clock time `since` (at most max_segments of them), oldest first. With
+    with_start, returns (frames, wall-clock time of the first frame): when the segment
+    before the first one finished, i.e. when the first one began."""
     init, segs = _live_segments(live_dir, cam_id)
     recent = [p for p in segs if p.stat().st_mtime >= since][:max_segments] or segs[-1:]
+    i = segs.index(recent[0])
+    start = segs[i - 1].stat().st_mtime if i > 0 else recent[0].stat().st_mtime - HLS_SEG_SECONDS
     tmp = _concat_tmp(init, recent)
     rv = rotation_vf(rot)
     vf = f"fps={fps},{rv + ',' if rv else ''}scale={width}:-2"
@@ -221,7 +225,7 @@ async def live_frames(live_dir, cam_id: str, since: float, max_segments: int = 3
     frames = split_jpegs(out)
     if not frames:
         raise RuntimeError(redact(err.decode(errors="replace").strip()) or "no frames")
-    return frames
+    return (frames, start) if with_start else frames
 
 
 def split_jpegs(data: bytes) -> list[bytes]:
@@ -244,22 +248,27 @@ def pick_frame(frames: list[bytes], scores: list[dict[str, float]]) -> tuple[int
     """Choose the frame to push/keep for an event: the most confident person, else the
     most confident vehicle, else the frame nearest the trigger (~60% of the way in:
     the burst spans ~6 s before to ~4 s after it). Returns (index, labels seen)."""
-    labels = [c for c in ("person", "vehicle") if any(sc.get(c, 0) > 0 for sc in scores)]
-    for cat in ("person", "vehicle"):
+    from .detect import CATS
+    labels = [c for c in CATS if any(sc.get(c, 0) > 0 for sc in scores)]
+    for cat in CATS:
         best = max(range(len(frames)), key=lambda i: scores[i].get(cat, 0) if i < len(scores) else 0)
         if best < len(scores) and scores[best].get(cat, 0) > 0:
             return best, labels
     return trigger_index(len(frames)), labels
 
 
+def push_categories(policy: str) -> set[str]:
+    """alerts.push_on as the set of labels that push: "motion" (every event) or a
+    comma list of person / vehicle / animal ("person_vehicle" is the older spelling
+    of "person,vehicle")."""
+    return set(policy.replace("person_vehicle", "person,vehicle").split(",")) - {""}
+
+
 def should_push(policy: str, labels: list[str]) -> bool:
-    """alerts.push_on: "motion" pushes every event, "person" needs a person,
-    "person_vehicle" a person or a vehicle (moving, per analyze_burst)."""
+    """Whether an event with these labels (moving, per analyze_burst) is pushed."""
     if policy == "motion":
         return True
-    if policy == "person_vehicle":
-        return bool(labels)
-    return "person" in labels
+    return bool(push_categories(policy or "person") & set(labels))
 
 
 def trigger_index(n: int) -> int:
@@ -555,7 +564,13 @@ class Supervisor:
             return
         self._motion_pushing.add(cam_id)
         try:
-            img, labels = await self._capture_event(cam, ts, want_detect)
+            img, labels, boxes = await self._capture_event(cam, ts, want_detect)
+            if boxes and eid is not None and self.events is not None:
+                await asyncio.to_thread(self.events.set_boxes, eid, boxes)
+            if boxes:
+                from .detect import draw_boxes
+                shown = boxes["f"][boxes["pick"]]
+                img = await asyncio.to_thread(draw_boxes, img, shown)
             if want_thumb:
                 # Persist the frame as the event's thumbnail: the incident list and
                 # filmstrips then load instantly instead of running ffmpeg per image.
@@ -584,33 +599,36 @@ class Supervisor:
             if nxt is not None:
                 asyncio.ensure_future(self._motion_alert(cam_id, *nxt))
 
-    async def _capture_event(self, cam, ts: float, detect: bool) -> tuple[bytes, list[str]]:
-        """The frame that best shows what triggered motion at `ts`, plus labels.
+    async def _capture_event(self, cam, ts: float, detect: bool) -> tuple[bytes, list[str], dict | None]:
+        """The frame that best shows what triggered motion at `ts`, its labels, and the
+        burst's boxes ({"t0": first frame's time, "dt": seconds per frame, "pick": index
+        of the returned frame, "f": per-frame [[kind, x1, y1, x2, y2], ...]}).
 
         Measured on real pushes, the old single frame (start of the previous live
         segment) showed the person in 4 of 18 cases: the trigger lags the action
         (people were often visible ~2 s *before* it and gone right after), and that
         frame was itself ~4 s old. Instead wait a few seconds past the trigger,
         decode a ~10 s burst at 2 fps (≈6 s before to 4 s after) from the live
-        segments, and keep the frame with the most confident person (else vehicle).
-        Only moving objects seen in 2+ frames count (ObjectDetector.analyze_burst),
-        so parked cars and furniture don't become labels.
+        segments, and keep the frame with the most confident person (else vehicle,
+        else animal). Only moving objects seen in 2+ frames count
+        (ObjectDetector.analyze), so parked cars and furniture don't become labels.
         Pushes arrive ~5 s later than before, but show the subject.
         """
         await asyncio.sleep(max(0.0, ts + CAPTURE_AFTER - time.time()))
         rot = getattr(cam, "rotation", 0)
         try:
-            frames = await live_frames(self.cfg.live_dir, cam.id, since=ts - 4.5,
-                                       max_segments=math.ceil(10 / HLS_SEG_SECONDS), rot=rot)
+            frames, t0 = await live_frames(self.cfg.live_dir, cam.id, since=ts - 4.5,
+                                           max_segments=math.ceil(10 / HLS_SEG_SECONDS), rot=rot,
+                                           with_start=True)
         except Exception as e:
             log.debug("[%s] frame burst failed (%s); single snapshot", cam.id, e)
             img = await snapshot_camera(cam, self.cfg)
-            return img, (await asyncio.to_thread(self.detector.detect, img, cam.zones) if detect else [])
+            return img, (await asyncio.to_thread(self.detector.detect, img, cam.zones) if detect else []), None
         if not detect:
-            return frames[trigger_index(len(frames))], []
-        scores, labels = await asyncio.to_thread(self.detector.analyze_burst, frames, cam.zones)
+            return frames[trigger_index(len(frames))], [], None
+        scores, labels, boxes = await asyncio.to_thread(self.detector.analyze, frames, cam.zones)
         i, _ = pick_frame(frames, scores)
-        return frames[i], labels
+        return frames[i], labels, {"t0": round(t0, 2), "dt": 0.5, "pick": i, "f": boxes}
 
     async def start(self) -> None:
         if not shutil.which(FFMPEG):

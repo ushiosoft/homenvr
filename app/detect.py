@@ -26,10 +26,20 @@ VOC = ["background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "c
        "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
        "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
 VOC_CAT = {"person": "person", "car": "vehicle", "bus": "vehicle", "motorbike": "vehicle",
-           "bicycle": "vehicle", "train": "vehicle"}
-# COCO class index -> category (0 person; 1 bicycle, 2 car, 3 motorcycle, 5 bus, 7 truck)
-COCO_CAT = {0: "person", 1: "vehicle", 2: "vehicle", 3: "vehicle", 5: "vehicle", 7: "vehicle"}
-CATS = ("person", "vehicle")
+           "bicycle": "vehicle", "train": "vehicle",
+           "bird": "animal", "cat": "animal", "cow": "animal", "dog": "animal", "horse": "animal",
+           "sheep": "animal"}
+# COCO class index -> category (0 person; 1 bicycle, 2 car, 3 motorcycle, 5 bus, 7 truck;
+# 14-23 bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe). Animals are
+# one category on purpose: what matters is "an animal", not which (COCO has no
+# rabbit, fox or deer; those tend to come out as one of these).
+COCO_CAT = {0: "person", 1: "vehicle", 2: "vehicle", 3: "vehicle", 5: "vehicle", 7: "vehicle",
+            **{i: "animal" for i in range(14, 24)}}
+CATS = ("person", "vehicle", "animal")
+# Moving areas with no detection are kept as "motion" boxes when at least this
+# fraction of the frame (0.05 %: ~115 px at 640x360, a small animal at a distance).
+BLOB_MIN_FRAC = 0.0005
+MAX_BLOBS = 6
 
 MODEL_DIR = os.environ.get("HOMENVR_MODEL_DIR", "/models")
 YOLOX_FILE = "yolox_tiny.onnx"
@@ -118,6 +128,13 @@ class ObjectDetector:
     # ---- motion event burst ---------------------------------------------------
 
     def analyze_burst(self, jpegs: list[bytes], zones=None) -> tuple[list[dict[str, float]], list[str]]:
+        scores, labels, _boxes = self.analyze(jpegs, zones)
+        return scores, labels
+
+    def analyze(self, jpegs: list[bytes], zones=None):
+        """analyze_burst() plus, per frame, the boxes worth showing: the detections that
+        counted ([category, x1, y1, x2, y2], 0-1 of the frame) and the moving areas no
+        detection explains (["motion", ...]) — what to look at when judging the event."""
         """Per-frame best *moving* confidence per category, plus the event's labels.
 
         A detection counts only if its box overlaps pixels that changed against the
@@ -128,21 +145,36 @@ class ObjectDetector:
         """
         empty = {c: 0.0 for c in CATS}
         if not self.ok:
-            return [dict(empty) for _ in jpegs], []
+            return [dict(empty) for _ in jpegs], [], [[] for _ in jpegs]
         imgs = [self._decode(j) for j in jpegs]
         masks = motion_masks(imgs, self._cv2, self._np)
         dets = [self.kept_boxes(img, zones) for img in imgs]
-        scores = []
+        scores, counted = [], []
         for k, (mask, frame_dets) in enumerate(zip(masks, dets)):
-            best = dict(empty)
+            best, kept = dict(empty), []
             for cat, conf, box in frame_dets:
                 if cat in STATIC_CATS and never_moved(k, box, cat, dets):
                     continue
                 if mask is None or moving_fraction(mask, box) >= MOVE_FRAC:
                     best[cat] = max(best[cat], conf)
+                    kept.append((cat, box))
             scores.append(best)
+            counted.append(kept)
         labels = [c for c in CATS if sum(s[c] > 0 for s in scores) >= MIN_FRAMES]
-        return scores, labels
+        blobs = [moving_blobs(mask, self._cv2, self._np, [b for _c, b in kept], zones)
+                 for mask, kept in zip(masks, counted)]
+        blobs = drop_fixtures(blobs)
+        boxes = []
+        for img, kept, fblobs in zip(imgs, counted, blobs):
+            if img is None:
+                boxes.append([])
+                continue
+            h, w = img.shape[:2]
+            # Only labels that held up over the burst; a one-frame blip shows as motion.
+            fb = [[cat, *_norm(box, w, h)] for cat, box in kept if cat in labels]
+            fb += [["motion", *_norm(b, w, h)] for b in fblobs]
+            boxes.append(fb)
+        return scores, labels, boxes
 
     # ---- backends -------------------------------------------------------------
 
@@ -220,6 +252,85 @@ def motion_masks(imgs, cv2, np, gap: int = 2):
                 m |= (cv2.absdiff(g, grey[j]) >= DIFF_LEVEL).astype(np.uint8)
         masks.append(cv2.dilate(m, np.ones((5, 5), np.uint8)) if m.any() or len(grey) > 1 else None)
     return masks
+
+
+def _norm(box, w: int, h: int) -> list[float]:
+    x1, y1, x2, y2 = box
+    return [round(min(max(x1 / w, 0.0), 1.0), 3), round(min(max(y1 / h, 0.0), 1.0), 3),
+            round(min(max(x2 / w, 0.0), 1.0), 3), round(min(max(y2 / h, 0.0), 1.0), 3)]
+
+
+def moving_blobs(mask, cv2, np, explained, zones=None) -> list[tuple[int, int, int, int]]:
+    """Bounding boxes of the largest changed areas in a frame's motion mask, minus those
+    whose centre is inside a detection (already shown) or in an ignore zone."""
+    if mask is None:
+        return []
+    h, w = mask.shape
+    n, _lab, st, _cen = cv2.connectedComponentsWithStats(mask)
+    out = []
+    for i in sorted(range(1, n), key=lambda i: -st[i, 4]):
+        x, y, bw, bh, area = (int(v) for v in st[i])
+        if area < BLOB_MIN_FRAC * w * h or len(out) >= MAX_BLOBS:
+            break
+        cx, cy = x + bw / 2, y + bh / 2
+        if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in explained):
+            continue
+        if zones:
+            from .zones import inside
+            if any(inside(cx / w, cy / h, z) for z in zones):
+                continue
+        out.append((x, y, x + bw, y + bh))
+    return out
+
+
+FIXTURE_FRAC = 0.8  # a moving area at the same place in this share of the frames is a fixture
+
+
+def drop_fixtures(blobs: list[list]) -> list[list]:
+    """Remove moving areas that sit at the same place in nearly every frame of the
+    burst: the camera's own clock overlay (its digits change every second) and similar
+    flicker. A passing animal or person moves on, so it never qualifies."""
+    n = len(blobs)
+    if n < 4:
+        return blobs
+    out = []
+    for k, fb in enumerate(blobs):
+        keep = []
+        for b in fb:
+            same = sum(any(iou(b, o) >= 0.5 for o in other) for j, other in enumerate(blobs) if j != k)
+            if same < FIXTURE_FRAC * (n - 1):
+                keep.append(b)
+        out.append(keep)
+    return out
+
+
+# BGR colours matching the UI (--person, --vehicle, --animal, --motion).
+BOX_COLOURS = {"person": (128, 222, 74), "vehicle": (36, 191, 251), "animal": (250, 139, 192),
+               "motion": (184, 163, 148)}
+
+
+def draw_boxes(jpeg: bytes, boxes: list) -> bytes:
+    """The frame with its boxes drawn in (for thumbnails and push photos)."""
+    if not boxes:
+        return jpeg
+    try:
+        import cv2
+        import numpy as np
+    except ImportError:
+        return jpeg
+    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return jpeg
+    h, w = img.shape[:2]
+    t = max(1, round(w / 320))
+    for kind, x1, y1, x2, y2 in sorted(boxes, key=lambda b: b[0] != "motion"):   # labels on top
+        p1, p2 = (int(x1 * w), int(y1 * h)), (int(x2 * w), int(y2 * h))
+        colour = BOX_COLOURS.get(kind, BOX_COLOURS["motion"])
+        cv2.rectangle(img, p1, p2, colour, t if kind == "motion" else t + 1)
+        if kind != "motion":
+            cv2.putText(img, kind, (p1[0], max(12, p1[1] - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.4 * t, colour, t)
+    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return buf.tobytes() if ok else jpeg
 
 
 def iou(a, b) -> float:

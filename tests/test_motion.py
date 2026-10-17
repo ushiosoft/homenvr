@@ -60,7 +60,7 @@ def test_event_during_analysis_is_queued_not_dropped(tmp_path):
     async def fake_capture(cam, ts, detect):
         seen.append(ts)
         await asyncio.sleep(0.05)
-        return b"\xff\xd8x\xff\xd9", []
+        return b"\xff\xd8x\xff\xd9", [], None
     sup._capture_event = fake_capture
 
     async def run():
