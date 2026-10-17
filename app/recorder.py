@@ -49,6 +49,11 @@ def socket_timeout_args() -> list[str]:
 
 # How long a live/motion worker stays on the NVR fallback before retrying go2rtc.
 FALLBACK_RETRY_SECONDS = 300
+# go2rtc starts a stream's producer (and, for H.265, its transcoder) on demand, so
+# right after a (re)start its restream can refuse the first probes for a few
+# seconds. Retry it this many times, this far apart, before using the fallback.
+PREFERRED_ATTEMPTS = 4
+PREFERRED_RETRY_PAUSE = 5.0
 
 
 def sub_sources(cam: Camera, cfg: Config) -> list[str]:
@@ -73,10 +78,14 @@ async def pick_source(urls: list[str], transport: str) -> tuple[str, dict, bool]
     that answers. Raises the last error if none do."""
     err: Exception | None = None
     for i, url in enumerate(urls):
-        try:
-            return url, await probe(url, transport, timeout=15), i > 0
-        except Exception as e:  # noqa: BLE001 - try the next source
-            err = e
+        attempts = PREFERRED_ATTEMPTS if i == 0 and len(urls) > 1 else 1
+        for n in range(attempts):
+            try:
+                return url, await probe(url, transport, timeout=15), i > 0
+            except Exception as e:  # noqa: BLE001 - retry, then try the next source
+                err = e
+                if n + 1 < attempts:
+                    await asyncio.sleep(PREFERRED_RETRY_PAUSE)
     raise err or RuntimeError("no source")
 
 

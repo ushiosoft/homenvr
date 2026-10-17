@@ -77,12 +77,14 @@ class Go2rtc:
 
     def _call(self, method: str, path: str, timeout: float = 5) -> None:
         """go2rtc API write. go2rtc applies the change, then tries to save it to its
-        (deliberately read-only) config and answers 400 "read-only" - that's success."""
+        (deliberately read-only) config and answers 400 "read-only" - that's success.
+        A delete of something that was never in the file answers "path not exist"
+        (400 or 500) after the in-memory delete - also success."""
         try:
             urllib.request.urlopen(urllib.request.Request(f"{self.base}{path}", method=method), timeout=timeout)
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")
-            if "read-only" not in body:
+            if "read-only" not in body and "path not exist" not in body:
                 raise RuntimeError(f"go2rtc {method} failed: {e.code} {redact(body)[:200]}")
 
     @property

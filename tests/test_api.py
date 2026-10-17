@@ -81,8 +81,27 @@ def test_sub_sources_prefer_go2rtc_and_fall_back(monkeypatch):
             raise RuntimeError("connection refused")
         return {"video": "hevc"}
     monkeypatch.setattr(recorder, "probe", fake_probe)
+    monkeypatch.setattr(recorder, "PREFERRED_RETRY_PAUSE", 0)
     url, info, fallback = asyncio.run(recorder.pick_source(recorder.sub_sources(cfg.cameras[0], cfg), "tcp"))
     assert (url, fallback) == ("rtsp://nvr/102", True)
+
+
+def test_pick_source_waits_for_go2rtc_to_start(monkeypatch):
+    """Regression: right after a restart go2rtc's restream refused the first probe
+    (its transcoder was still starting) and the worker sat on the NVR for 5 min."""
+    import asyncio
+    from app import recorder
+    tries = []
+
+    async def fake_probe(url, transport="tcp", timeout=20):
+        tries.append(url)
+        if "go2rtc" in url and len(tries) < 3:
+            raise RuntimeError("404 not found")
+        return {"video": "h264"}
+    monkeypatch.setattr(recorder, "probe", fake_probe)
+    monkeypatch.setattr(recorder, "PREFERRED_RETRY_PAUSE", 0)
+    url, _info, fallback = asyncio.run(recorder.pick_source(["rtsp://go2rtc:8554/cam1", "rtsp://nvr/102"], "tcp"))
+    assert (url, fallback, len(tries)) == ("rtsp://go2rtc:8554/cam1", False, 3)
 
 
 def test_go2rtc_registration_is_stable(monkeypatch):
@@ -121,3 +140,16 @@ def test_go2rtc_registration_is_stable(monkeypatch):
     assert calls.count("PUT") == 2 and calls.count("DELETE") == 0
     codec["v"] = "h264"; g._codec.clear(); g.ensure_stream(cam)   # camera switched codec
     assert calls.count("DELETE") == 1 and calls.count("PUT") == 3 and g._registered["cam1"] == "rtsp://nvr/102"
+
+
+def test_go2rtc_delete_of_unsaved_stream_is_success(monkeypatch):
+    """go2rtc answers "yaml: path not exist" when deleting a stream that was never in
+    its config file (all of ours) — after deleting it in memory. Not a failure."""
+    import io, urllib.error
+    from app import webrtc
+    cfg = parse({"storage_dir": "/tmp/x", "webrtc_api": "http://go2rtc:1984", "cameras": []})
+
+    def fake_urlopen(req, timeout=5):
+        raise urllib.error.HTTPError(req.full_url, 500, "x", {}, io.BytesIO(b"yaml: path not exist"))
+    monkeypatch.setattr(webrtc.urllib.request, "urlopen", fake_urlopen)
+    webrtc.Go2rtc(cfg)._call("DELETE", "/api/streams?src=cam1")   # no raise
