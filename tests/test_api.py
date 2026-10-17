@@ -83,3 +83,41 @@ def test_sub_sources_prefer_go2rtc_and_fall_back(monkeypatch):
     monkeypatch.setattr(recorder, "probe", fake_probe)
     url, info, fallback = asyncio.run(recorder.pick_source(recorder.sub_sources(cfg.cameras[0], cfg), "tcp"))
     assert (url, fallback) == ("rtsp://nvr/102", True)
+
+
+def test_go2rtc_registration_is_stable(monkeypatch):
+    """Regression: go2rtc lists producer URLs without our "ffmpeg:...#video=" source
+    options, which made every keep-warm pass delete + re-create the stream (and a
+    read-only 400 on DELETE left it deleted). Registration must happen once, and only
+    be redone when the camera's codec changes or go2rtc lost the stream."""
+    import io, json, urllib.error
+    from app import webrtc
+    cfg = parse({"storage_dir": "/tmp/x", "webrtc_api": "http://go2rtc:1984",
+                 "cameras": [{"id": "cam1", "record_url": "r", "live_url": "rtsp://nvr/102"}]})
+    streams, calls = {}, []
+
+    def fake_urlopen(req, timeout=5):
+        url = req if isinstance(req, str) else req.full_url
+        method = "GET" if isinstance(req, str) else req.get_method()
+        calls.append(method)
+        if method == "GET":
+            return io.BytesIO(json.dumps({k: {"producers": [{"url": "rtsp://nvr/102"}]} for k in streams}).encode())
+        if method == "PUT":
+            streams["cam1"] = 1
+        if method == "DELETE":
+            streams.pop("cam1", None)
+        raise urllib.error.HTTPError(url, 400, "Bad Request", {}, io.BytesIO(b"open /config/go2rtc.yaml: read-only file system"))
+    monkeypatch.setattr(webrtc.urllib.request, "urlopen", fake_urlopen)
+    g = webrtc.Go2rtc(cfg)
+    codec = {"v": "hevc"}
+    monkeypatch.setattr(webrtc, "probe_codec", lambda url, timeout=20: codec["v"])
+    cam = cfg.cameras[0]
+    g.ensure_stream(cam)
+    assert "cam1" in streams and calls.count("PUT") == 1
+    for _ in range(3):
+        g.ensure_stream(cam)                       # keep-warm passes: no churn
+    assert calls.count("PUT") == 1 and calls.count("DELETE") == 0
+    streams.clear(); g.ensure_stream(cam)          # go2rtc restarted and lost it
+    assert calls.count("PUT") == 2 and calls.count("DELETE") == 0
+    codec["v"] = "h264"; g._codec.clear(); g.ensure_stream(cam)   # camera switched codec
+    assert calls.count("DELETE") == 1 and calls.count("PUT") == 3 and g._registered["cam1"] == "rtsp://nvr/102"

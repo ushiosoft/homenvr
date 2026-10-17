@@ -68,6 +68,19 @@ class Go2rtc:
         self.cfg = cfg
         self.base = cfg.webrtc_api
         self._codec: dict[str, tuple[float, str | None]] = {}  # cam id -> (checked at, codec)
+        # The source we registered per camera. go2rtc reports a stream's producer URL
+        # without the "ffmpeg:" prefix and "#video=..." options, so it can't tell us.
+        self._registered: dict[str, str] = {}
+
+    def _call(self, method: str, path: str, timeout: float = 5) -> None:
+        """go2rtc API write. go2rtc applies the change, then tries to save it to its
+        (deliberately read-only) config and answers 400 "read-only" - that's success."""
+        try:
+            urllib.request.urlopen(urllib.request.Request(f"{self.base}{path}", method=method), timeout=timeout)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            if "read-only" not in body:
+                raise RuntimeError(f"go2rtc {method} failed: {e.code} {redact(body)[:200]}")
 
     @property
     def enabled(self) -> bool:
@@ -89,23 +102,19 @@ class Go2rtc:
         """Make sure go2rtc has a stream named after the camera with the right source
         for its current codec (idempotent; re-creates it if the codec changed)."""
         want = stream_source(cam, self.codec(cam))
-        cur = self._streams().get(cam.id)
-        if cur is not None:
-            if any(p.get("url") == want for p in (cur.get("producers") or [])):
-                return
-            # Source changed (camera switched codec): drop the old stream first.
-            q = urllib.parse.urlencode({"src": cam.id})
-            urllib.request.urlopen(urllib.request.Request(f"{self.base}/api/streams?{q}", method="DELETE"), timeout=5)
-            log.info("[%s] camera codec changed; re-registering its go2rtc stream", cam.id)
-        q = urllib.parse.urlencode({"name": cam.id, "src": want})
-        try:
-            urllib.request.urlopen(urllib.request.Request(f"{self.base}/api/streams?{q}", method="PUT"), timeout=5)
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            if "read-only" not in body:  # anything but the expected "can't save to config"
-                raise RuntimeError(f"go2rtc rejected stream {cam.id}: {e.code} {redact(body)[:200]}")
+        exists = cam.id in self._streams()
+        if exists and self._registered.get(cam.id) == want:
+            return
+        if exists:
+            # Ours from before a homenvr restart (source unknown), or the camera switched
+            # codec: replace it so the source is right.
+            self._call("DELETE", "/api/streams?" + urllib.parse.urlencode({"src": cam.id}))
+            if self._registered.get(cam.id):
+                log.info("[%s] camera codec changed; re-registering its go2rtc stream", cam.id)
+        self._call("PUT", "/api/streams?" + urllib.parse.urlencode({"name": cam.id, "src": want}))
         if cam.id not in self._streams():
             raise RuntimeError(f"go2rtc did not create stream {cam.id}")
+        self._registered[cam.id] = want
         log.info("[%s] webrtc stream registered with go2rtc (%s)", cam.id,
                  "pass-through" if want == cam.live_url else "converted to H.264")
 
