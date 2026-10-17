@@ -307,6 +307,17 @@ class Storage:
 
     # ---- export ----------------------------------------------------------
 
+    def window_parts(self, camera: str, start: float, end: float) -> list[tuple[Path, float, float]]:
+        """The recording files covering [start, end) (active + grace) as (path, offset
+        into the file, seconds from there), oldest first."""
+        segs = self.segments(camera, start, end) + self.segments(camera, start, end, root=self.root / GRACE_DIR)
+        out = []
+        for seg in sorted(segs, key=lambda s: s.start):
+            a, b = max(start, seg.start), min(end, seg.end)
+            if b > a:
+                out.append((seg.path, a - seg.start, b - a))
+        return out
+
     def concat_list(self, camera: str, start: float, end: float) -> str:
         """ffmpeg concat-demuxer script covering [start, end), active + grace."""
         lines = ["ffconcat version 1.0"]

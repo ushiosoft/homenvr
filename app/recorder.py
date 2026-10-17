@@ -352,36 +352,42 @@ BURST_BEFORE, BURST_AFTER = 6.0, 10.0
 REFINE_AFTER = 20.0   # seconds after the trigger: by then the recording holds the window
 
 
+def window_inputs(parts: list, audio: bool = False) -> tuple[list[str], str | None]:
+    """ffmpeg inputs that decode exactly the recording window `parts`
+    (Storage.window_parts), each file opened with an input seek, plus the filtergraph
+    joining several (None for one file; its output is then [v] / [a]).
+
+    Input seeking, not the concat demuxer's inpoint: in the first file after a
+    recorder restart (which starts with a stale keyframe and a gap) an inpoint lands
+    ~4 s early, while input seeking matches what review playback shows."""
+    args: list[str] = []
+    for path, off, length in parts:
+        args += ["-ss", f"{off:.3f}", "-t", f"{length:.3f}", "-i", str(path)]
+    if len(parts) == 1:
+        return args, None
+    pads = "".join(f"[{i}:v:0]" + (f"[{i}:a:0]" if audio else "") for i in range(len(parts)))
+    return args, f"{pads}concat=n={len(parts)}:v=1:a={1 if audio else 0}[v]" + ("[a]" if audio else "")
+
+
 async def recording_frames(storage: Storage, cam: Camera, start: float, end: float, fps: float = 2,
                            width: int = 640, timeout: float = 60) -> list[bytes]:
     """JPEG frames (fps per second) of the recording from exactly `start` to `end`, rotated
     like the camera: the same frames, at the same times, as review playback shows."""
-    path, offset = await asyncio.to_thread(storage.segment_at, cam.id, start)
-    if not path:
+    parts = await asyncio.to_thread(storage.window_parts, cam.id, start, end)
+    if not parts:
         return []
-    kf, _codec = await keyframe_before(path, offset)
-    k = start - offset + kf            # decode from the keyframe, then drop the lead-in
-    script = storage.concat_list(cam.id, k, end)
-    if script.count("\nfile ") == 0:
-        return []
-    import tempfile
-    fd, lst = tempfile.mkstemp(suffix=".ffconcat")
-    with os.fdopen(fd, "w") as f:
-        f.write(script)
+    inputs, joined = window_inputs(parts)
     rv = rotation_vf(cam.rotation)
+    vf = f"fps={fps},{rv + ',' if rv else ''}scale={width}:-2"
+    graph = ["-filter_complex", f"{joined};[v]{vf}[o]", "-map", "[o]"] if joined else ["-vf", vf]
+    proc = await asyncio.create_subprocess_exec(
+        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", *inputs, *graph, "-q:v", "4",
+        "-f", "image2pipe", "-c:v", "mjpeg", "-", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
-        proc = await asyncio.create_subprocess_exec(
-            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0", "-f", "concat", "-i", lst,
-            "-ss", f"{start - k:.3f}", "-t", f"{end - start:.3f}",
-            "-vf", f"fps={fps},{rv + ',' if rv else ''}scale={width}:-2", "-q:v", "4",
-            "-f", "image2pipe", "-c:v", "mjpeg", "-", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout)
-        except asyncio.TimeoutError:
-            proc.kill(); await proc.wait()
-            return []
-    finally:
-        os.unlink(lst)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        proc.kill(); await proc.wait()
+        return []
     return split_jpegs(out)
 
 

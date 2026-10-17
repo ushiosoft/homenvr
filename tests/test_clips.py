@@ -148,3 +148,13 @@ def test_first_file_renamed_to_when_its_footage_starts(tmp_path, monkeypatch):
     g = d / names[0]; os.utime(g, (now, now))
     asyncio.run(w._fix_first_stamp(parse_stamp(names[0])))
     assert [p.name for p in d.glob("*.mp4")] == names
+
+
+def test_recording_frames_across_two_files(tmp_path):
+    from app.recorder import recording_frames
+    p = recording(tmp_path)                                  # BASE .. BASE+20
+    q = p.with_name(f"{format_stamp(BASE + 20)}.mp4")        # BASE+20 .. BASE+40
+    shutil.copy(p, q); os.utime(q, (BASE + 40, BASE + 40))
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    frames = asyncio.run(recording_frames(Storage(tmp_path), cfg.cameras[0], BASE + 16, BASE + 24))
+    assert len(frames) == 16

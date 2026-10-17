@@ -284,24 +284,29 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         from .recorder import rotation_vf
         rv = rotation_vf(cam.rotation)
         vf = (rv + "," if rv else "") + f"scale=-2:{height - height % 2}"
-        # Decode from the keyframe before `start` and drop the lead-in: a concat inpoint
-        # alone starts the output at that keyframe (seconds early, labelled as `start`).
-        from .recorder import keyframe_before
-        path, offset = await asyncio.to_thread(storage.segment_at, cam_id, start)
-        skip = 0.0
-        if path:
-            try:
-                kf, _c = await keyframe_before(path, offset)
-                skip = offset - kf
-                script = storage.concat_list(cam_id, start - skip, start + dur)
-            except Exception:  # noqa: BLE001 - keyframe-aligned start is still playable
-                skip = 0.0
-        exact = ["-ss", f"{skip:.3f}"] if skip > 0.01 else []
+        # Start exactly at `start` (a concat inpoint alone starts at the keyframe before
+        # it, seconds early). Within one file (the usual case) an input seek is exact,
+        # also in a restart's first file; across files, decode from the keyframe and
+        # drop the lead-in.
+        from .recorder import keyframe_before, window_inputs
+        parts = await asyncio.to_thread(storage.window_parts, cam_id, start, start + dur)
+        inputs, exact = None, []
+        if len(parts) == 1:
+            inputs = window_inputs(parts)[0]
+        else:
+            path, offset = await asyncio.to_thread(storage.segment_at, cam_id, start)
+            if path:
+                try:
+                    kf, _c = await keyframe_before(path, offset)
+                    script = storage.concat_list(cam_id, start - (offset - kf), start + dur)
+                    exact = ["-ss", f"{offset - kf:.3f}"] if offset - kf > 0.01 else []
+                except Exception:  # noqa: BLE001 - keyframe-aligned start is still playable
+                    pass
         if file:
-            return await _ranged_ffmpeg(f"pb-{cam_id}-{start:.3f}-{dur:g}-{height}", script, [
+            return await _ranged_ffmpeg(f"pb-{cam_id}-{start:.3f}-{dur:g}-{height}", script, inputs=inputs, out_args=[
                 *exact, "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast",
                 "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "96k"])
-        return await _stream_ffmpeg(script, [*exact,
+        return await _stream_ffmpeg(script, inputs=inputs, out_args=[*exact,
             # Keyframe every ~2 s: fragments (one per keyframe) are small, so the
             # browser can start playing ~2 s of encoded video in, not ~10 s.
             "-t", str(dur), "-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
@@ -363,7 +368,7 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
             p.unlink(missing_ok=True)
             total -= size
 
-    async def _ranged_ffmpeg(key: str, script: str, out_args: list[str]) -> FileResponse:
+    async def _ranged_ffmpeg(key: str, script: str, out_args: list[str], inputs: list[str] | None = None) -> FileResponse:
         play_cache.mkdir(parents=True, exist_ok=True)
         out = play_cache / f"{key}.mp4"
         lock = play_locks.setdefault(key, asyncio.Lock())
@@ -373,9 +378,10 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
                 lst = play_cache / f"{key}.ffconcat"
                 lst.write_text(script)
                 part = play_cache / f"{key}.part"
+                src = inputs or ["-safe", "0", "-f", "concat", "-i", str(lst)]
                 proc = await asyncio.create_subprocess_exec(
-                    FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0",
-                    "-f", "concat", "-i", str(lst), *out_args, "-movflags", "+faststart", "-f", "mp4", str(part),
+                    FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error",
+                    *src, *out_args, "-movflags", "+faststart", "-f", "mp4", str(part),
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
                 _, err = await proc.communicate()
                 lst.unlink(missing_ok=True)
@@ -386,13 +392,14 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         play_locks.pop(key, None)
         return FileResponse(out, media_type="video/mp4", headers={"Cache-Control": "no-store"})
 
-    async def _stream_ffmpeg(script: str, out_args: list[str]) -> StreamingResponse:
-        """Run ffmpeg over a concat script and stream its fragmented-MP4 output."""
+    async def _stream_ffmpeg(script: str, out_args: list[str], inputs: list[str] | None = None) -> StreamingResponse:
+        """Run ffmpeg over a concat script (or explicit `inputs`) and stream its
+        fragmented-MP4 output."""
         tmpdir = Path(tempfile.mkdtemp(prefix="pb-"))
         (tmpdir / "list.ffconcat").write_text(script)
+        src = inputs or ["-safe", "0", "-f", "concat", "-i", str(tmpdir / "list.ffconcat")]
         proc = await asyncio.create_subprocess_exec(
-            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0",
-            "-f", "concat", "-i", str(tmpdir / "list.ffconcat"), *out_args,
+            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", *src, *out_args,
             "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "-f", "mp4", "pipe:1",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         )
