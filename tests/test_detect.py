@@ -246,3 +246,15 @@ def test_learned_fixture_is_dropped_in_later_bursts():
     _s, _l, boxes, _f = d.analyze(burst({3, 4}), fixtures=found)
     flat = [b for fb in boxes for b in fb]
     assert flat and all(b[2] > 0.3 for b in flat)                 # only the mover (low) remains, no clock (top)
+
+
+def test_pick_frame_only_considers_the_event_labels():
+    """Regression: a one-frame vehicle blip (not a label) picked the thumbnail over the
+    frames showing the animal the event was labelled with."""
+    from app.recorder import pick_frame
+    z = {"person": 0.0, "vehicle": 0.0, "animal": 0.0}
+    sc = [dict(z) for _ in range(6)]
+    sc[1]["vehicle"] = 0.9
+    sc[3]["animal"], sc[4]["animal"] = 0.5, 0.7
+    assert pick_frame([b""] * 6, sc, ["animal"])[0] == 4
+    assert pick_frame([b""] * 6, sc)[0] == 1          # without labels: the old order

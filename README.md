@@ -34,14 +34,22 @@ and stores recordings on hardware you control.
   otherwise the server transcodes to H.264 on the fly.
 - **Motion detection** — server-side frame-differencing on the sub-stream (no NVR
   changes), then **YOLOX-tiny** object detection labels each event person /
-  vehicle. Only *moving* objects seen in 2+ frames count, and vehicles that never
-  moved during the burst (parked cars, covered furniture) are ignored.
+  vehicle / **animal** (any animal: birds, cats, dogs, deer-sized animals — one
+  category). Only *moving* objects seen in 2+ frames count, and vehicles or
+  animals that never moved during the burst (parked cars, covered furniture,
+  railings with shadows) are ignored.
+- **Detection boxes** — each event keeps what moved in its ~10 s burst: labelled
+  detections (green person, amber vehicle, purple animal) and unexplained moving
+  areas (dashed). Drawn into thumbnails and push photos, and over review
+  playback in sync (*Boxes* toggle) — the quick way to dismiss shadow/foliage
+  noise. The camera's clock overlay is recognised and never boxed.
 - **Incidents** — events of all cameras clustered into incidents (2-min split),
   noisy single-camera stretches folded into "busy" periods, false alarms
   dismissable.
 - **Push alerts** — ntfy, Discord/Slack webhook, Telegram, or email: health
   alerts (camera stopped recording, disk full) and **photo pushes on motion**,
-  filtered by `push_on` (person / person or vehicle / any motion), per camera.
+  filtered by `push_on` (person / person or vehicle / person or animal / person,
+  vehicle or animal / any motion), per camera.
   With a *Public address* set, each push links to the event (`/?play=<t>&cam=<id>`).
 - **Ignore zones** — per camera, drawn over a snapshot: motion inside them makes
   no events, and people/vehicles standing in them aren't labelled or pushed

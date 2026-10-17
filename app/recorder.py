@@ -244,13 +244,17 @@ def split_jpegs(data: bytes) -> list[bytes]:
     return out
 
 
-def pick_frame(frames: list[bytes], scores: list[dict[str, float]]) -> tuple[int, list[str]]:
+def pick_frame(frames: list[bytes], scores: list[dict[str, float]],
+               event_labels: list[str] | None = None) -> tuple[int, list[str]]:
     """Choose the frame to push/keep for an event: the most confident person, else the
-    most confident vehicle, else the frame nearest the trigger (~60% of the way in:
-    the burst spans ~6 s before to ~4 s after it). Returns (index, labels seen)."""
+    most confident vehicle, else animal, else the frame nearest the trigger (~60% of
+    the way in: the burst spans ~6 s before to ~4 s after it). With event_labels (the
+    event's labels from ObjectDetector.analyze) only those categories are considered:
+    a one-frame blip of another category must not pick a frame that doesn't show what
+    the event is labelled with. Returns (index, labels seen)."""
     from .detect import CATS
     labels = [c for c in CATS if any(sc.get(c, 0) > 0 for sc in scores)]
-    for cat in CATS:
+    for cat in (c for c in CATS if event_labels is None or c in event_labels):
         best = max(range(len(frames)), key=lambda i: scores[i].get(cat, 0) if i < len(scores) else 0)
         if best < len(scores) and scores[best].get(cat, 0) > 0:
             return best, labels
@@ -632,7 +636,7 @@ class Supervisor:
         known = [f[0] for f in self._fixtures.get(cam.id, []) if f[1] >= 2]
         scores, labels, boxes, found = await asyncio.to_thread(self.detector.analyze, frames, cam.zones, known)
         self._remember_fixtures(cam.id, found)
-        i, _ = pick_frame(frames, scores)
+        i, _ = pick_frame(frames, scores, labels)
         return frames[i], labels, {"t0": round(t0, 2), "dt": 0.5, "pick": i, "f": boxes}
 
     def _remember_fixtures(self, cam_id: str, found: list) -> None:
