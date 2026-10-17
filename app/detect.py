@@ -68,6 +68,11 @@ class ObjectDetector:
         self.confidence = confidence
         self.ok = False
         self.backend = None
+        # One network, called from worker threads for several cameras at once; an
+        # OpenCV dnn Net is not thread-safe (interleaved setInput/forward produced
+        # garbage: dozens of phantom "vehicles", once an exp() overflow).
+        import threading
+        self._lock = threading.Lock()
         self._cv2 = self._np = self._net = None
         d = Path(model_dir)
         try:
@@ -186,8 +191,9 @@ class ObjectDetector:
     def _mobilenet(self, img):
         cv2 = self._cv2
         h, w = img.shape[:2]
-        self._net.setInput(cv2.dnn.blobFromImage(cv2.resize(img, (300, 300)), 0.007843, (300, 300), 127.5))
-        det = self._net.forward()
+        with self._lock:
+            self._net.setInput(cv2.dnn.blobFromImage(cv2.resize(img, (300, 300)), 0.007843, (300, 300), 127.5))
+            det = self._net.forward()
         out = []
         for i in range(det.shape[2]):
             conf = float(det[0, 0, i, 2])
@@ -213,8 +219,10 @@ class ObjectDetector:
         r = min(YOLOX_SIZE / h, YOLOX_SIZE / w)
         canvas = np.full((YOLOX_SIZE, YOLOX_SIZE, 3), 114, np.uint8)  # YOLOX preprocessing:
         canvas[:int(h * r), :int(w * r)] = cv2.resize(img, (int(w * r), int(h * r)))  # BGR 0-255, top-left pad
-        self._net.setInput(cv2.dnn.blobFromImage(canvas, 1.0, (YOLOX_SIZE, YOLOX_SIZE), swapRB=False))
-        o = self._net.forward()[0]                      # (N, 85): cx, cy, w, h (raw), obj, 80 classes
+        blob = cv2.dnn.blobFromImage(canvas, 1.0, (YOLOX_SIZE, YOLOX_SIZE), swapRB=False)
+        with self._lock:
+            self._net.setInput(blob)
+            o = self._net.forward()[0]                  # (N, 85): cx, cy, w, h (raw), obj, 80 classes
         idx = sorted(COCO_CAT)
         cls = o[:, 4:5] * o[:, [5 + i for i in idx]]    # objectness x class score
         best = cls.max(1)
@@ -223,8 +231,8 @@ class ObjectDetector:
             return []
         grid, stride = self._grid
         xy = (o[keep, :2] + grid[keep]) * stride[keep]
-        # Clamp the log-size: a garbage output (seen once, on a frame decoded while the
-        # server was shutting down) overflowed exp() to inf and failed the whole event.
+        # Clamp the log-size: a garbage output (from concurrent use of the network,
+        # before the lock above) overflowed exp() to inf and failed the whole event.
         wh = np.exp(np.clip(o[keep, 2:4], -10, 8)) * stride[keep]
         out = []
         for k, (cx, cy), (bw, bh) in zip(keep, xy, wh):
@@ -233,7 +241,19 @@ class ObjectDetector:
             c = int(cls[k].argmax())
             out.append((COCO_CAT[idx[c]], float(cls[k, c]),
                         (int((cx - bw / 2) / r), int((cy - bh / 2) / r), int((cx + bw / 2) / r), int((cy + bh / 2) / r))))
-        return out
+        return nms(out, cv2)
+
+
+def nms(dets: list, cv2, iou_max: float = 0.45) -> list:
+    """One box per object: YOLOX proposes several overlapping boxes for each (it has
+    no suppression built in). Per category, keep the most confident of each cluster."""
+    out = []
+    for cat in {d[0] for d in dets}:
+        group = [d for d in dets if d[0] == cat]
+        rects = [[b[0], b[1], b[2] - b[0], b[3] - b[1]] for _c, _s, b in group]
+        keep = cv2.dnn.NMSBoxes(rects, [s for _c, s, _b in group], 0.0, iou_max)
+        out += [group[int(i)] for i in (keep.flatten() if hasattr(keep, "flatten") else keep)]
+    return sorted(out, key=lambda d: -d[1])
 
 
 def motion_masks(imgs, cv2, np, gap: int = 2):

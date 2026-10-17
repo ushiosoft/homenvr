@@ -120,7 +120,8 @@ def test_yolox_garbage_output_does_not_fail():
     cv2 = pytest.importorskip("cv2")
     from app import detect
     d = object.__new__(detect.ObjectDetector)
-    d._cv2, d._np, d.confidence = cv2, np, 0.45
+    import threading
+    d._cv2, d._np, d.confidence, d._lock = cv2, np, 0.45, threading.Lock()
     d._grid = detect.ObjectDetector._yolox_grid(np)
     n = len(d._grid[0])
     o = np.zeros((n, 85), np.float32)
@@ -175,3 +176,40 @@ def test_fixed_flicker_is_not_motion():
     out = drop_fixtures(blobs)
     assert all(clock not in fb for fb in out)
     assert out[3] == [(30, 100, 42, 112)] and out[5] == [(50, 100, 62, 112)]
+
+
+def test_nms_one_box_per_object():
+    import cv2
+    from app.detect import nms
+    dets = [("person", 0.9, (10, 10, 50, 100)), ("person", 0.7, (12, 12, 52, 98)),
+            ("person", 0.6, (200, 10, 240, 100)), ("vehicle", 0.8, (11, 11, 51, 99))]
+    out = nms(dets, cv2)
+    assert sorted(out) == sorted([("person", 0.9, (10, 10, 50, 100)), ("person", 0.6, (200, 10, 240, 100)),
+                                  ("vehicle", 0.8, (11, 11, 51, 99))])
+    assert nms([], cv2) == []
+
+
+def test_detector_serializes_network_calls():
+    """Several cameras analyse bursts in parallel threads on one network: calls must
+    not overlap (an OpenCV Net is not thread-safe)."""
+    import threading, time
+    import numpy as np
+    from app import detect
+    d = object.__new__(detect.ObjectDetector)
+    import cv2
+    d._cv2, d._np, d.confidence, d._lock = cv2, np, 0.45, threading.Lock()
+    d._grid = detect.ObjectDetector._yolox_grid(np)
+    state = {"in": 0, "overlap": False}
+
+    class Net:
+        def setInput(self, _):
+            state["in"] += 1
+            state["overlap"] |= state["in"] > 1
+            time.sleep(0.01)
+        def forward(self):
+            state["in"] -= 1
+            return np.zeros((1, len(d._grid[0]), 85), np.float32)
+    d._net = Net()
+    ts = [threading.Thread(target=d._yolox, args=(np.zeros((360, 640, 3), np.uint8),)) for _ in range(4)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert not state["overlap"]
