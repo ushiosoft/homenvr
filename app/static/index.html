@@ -948,33 +948,32 @@ function tileTime(id) {
 }
 // Get a direct-play tile from its keyframe lead-in to the exact time asked for. The
 // stream has no Range support, and seeking in it makes the browser start over, so the
-// lead-in is played through at 16x behind the loading overlay and stopped on the first
-// frame at or past the target (requestVideoFrameCallback; timeupdate where missing).
-const FF_RATE = 16;
+// lead-in is played through fast behind the loading overlay (rate picked so it takes
+// ~0.75 s) and stopped at the target by a timer aimed at it. (requestVideoFrameCallback
+// would be exact but doesn't fire for tiles scrolled out of view.)
 function reachTarget(id) {
   const t = tiles[id], v = t.video;
   if (t.target == null || t.ff || !['playing', 'buffering', 'paused'].includes(t.state)) return;
-  const gen = t.gen;
-  const arrived = now => {
-    if (gen !== t.gen || t.target == null) return true;
-    if (t.start + now < t.target - 0.04) return false;
-    t.target = null; t.ff = false;
-    v.playbackRate = S.speed;
-    if (S.paused) v.pause();
-    setOverlay(id, '');
-    return true;
-  };
-  if (arrived(v.currentTime)) return;
+  const gen = t.gen, left = () => t.target - (t.start + v.currentTime);
+  if (left() <= 0.04) { finishTarget(id); return; }
   t.ff = true;
-  v.playbackRate = FF_RATE;
+  const rate = clamp(left() / 0.75, 2, 16);
+  v.playbackRate = rate;
   if (v.paused) v.play().catch(() => {});
-  if (v.requestVideoFrameCallback) {
-    const step = (_now, meta) => { if (!arrived(meta.mediaTime)) v.requestVideoFrameCallback(step); else t.ff = false; };
-    v.requestVideoFrameCallback(step);
-  } else {
-    const tu = () => { if (arrived(v.currentTime)) { t.ff = false; v.removeEventListener('timeupdate', tu); } };
-    v.addEventListener('timeupdate', tu);
-  }
+  const tick = () => {
+    if (gen !== t.gen || t.target == null) return;
+    const l = left();
+    if (l <= 0.04) finishTarget(id);
+    else setTimeout(tick, clamp(l / rate * 1000 - 5, 5, 200));
+  };
+  tick();
+}
+function finishTarget(id) {
+  const t = tiles[id], v = t.video;
+  t.target = null; t.ff = false;
+  v.playbackRate = S.speed;
+  if (S.paused) v.pause();
+  setOverlay(id, '');
 }
 function onTilePlaying(id) {
   const t = tiles[id];
