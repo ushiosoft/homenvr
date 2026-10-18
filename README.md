@@ -32,8 +32,10 @@ and stores recordings on hardware you control.
 - **Playback** — local recordings, no "failed to grab recording". H.264 recordings
   (and HEVC, in browsers that decode it) play the original 2K stream directly;
   otherwise the server transcodes to H.264 on the fly.
-- **Motion detection** — server-side frame-differencing on the sub-stream (no NVR
-  changes), then **YOLOX-tiny** object detection labels each event person /
+- **Motion detection** — server-side, on the sub-stream (no NVR changes): an event
+  when a share of the picture (default 1 %, per camera) clearly changes for 0.4 s —
+  camera exposure steps and compression pulses don't count, a distant walker does —
+  then **YOLOX-tiny** object detection labels each event person /
   vehicle / **animal** (any animal: birds, cats, dogs, deer-sized animals — one
   category). Only *moving* objects seen in 2+ frames count, and vehicles or
   animals that never moved during the burst (parked cars, covered furniture,
@@ -51,9 +53,9 @@ and stores recordings on hardware you control.
   filtered by `push_on` (person / person or vehicle / person or animal / person,
   vehicle or animal / any motion), per camera.
   With a *Public address* set, each push links to the event (`/?play=<t>&cam=<id>`).
-- **Ignore zones** — per camera, drawn over a snapshot: motion inside them makes
-  no events, and people/vehicles standing in them aren't labelled or pushed
-  (the street beyond the driveway or gate).
+- **Ignore zones** — per camera, drawn over a snapshot; each ignores motion and/or
+  people, vehicles & animals standing in it (a street: detections only, so a walker
+  on the sidewalk still triggers; a BBQ cover in the wind: motion only).
 - **Exact seeking** — review starts at the exact second you pick; saved clips
   play from a seekable copy. Safari/iPhone/iPad get Range-capable files.
 - **Clip export + permanent "saved" clips** — never auto-deleted, with thumbnails
