@@ -270,7 +270,28 @@
   .btn.on { border-color:var(--accent); background:#1c2635; color:#bfdbfe; }
   .iconbtn.snd.on { background:var(--accent); color:var(--accent-ink); }
   .savedgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:12px; }
-  .camtabs { display:flex; gap:6px; flex-wrap:wrap; }
+  /* Saved player */
+  #modal .box.player { width:min(96vw,1100px); padding:12px 12px 10px; }
+  #modal .player video { width:100%; max-width:none; max-height:72vh; }
+  .phead { display:flex; align-items:center; gap:4px; margin:0 0 10px; }
+  .ptitle { flex:1; min-width:0; display:flex; align-items:baseline; gap:10px; overflow:hidden; white-space:nowrap; }
+  .ptitle b { font-weight:600; overflow:hidden; text-overflow:ellipsis; }
+  .ibtn.sm { width:36px; height:36px; color:var(--muted); }
+  .ibtn.sm:hover { color:var(--fg); }
+  .pbar { display:flex; align-items:center; gap:12px; margin-top:10px; flex-wrap:wrap; }
+  .pbar > .sub { padding-left:2px; }
+  .pctl { margin-left:auto; display:flex; align-items:center; gap:4px; }
+  .pbar .seg { padding:3px; gap:2px; }
+  .pbar .seg button { height:30px; padding:0 10px; font-size:13px; }
+  .speedseg button { min-width:40px; padding:0 6px !important; font-size:14px !important; }
+  .ibtn.skip { width:auto; padding:0 8px; font-size:13px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  #modal .player .hint:empty { display:none; }
+  @media (max-width:760px) {
+    #modal .box.player { padding:10px 8px 8px; }
+    .pbar { gap:8px; }
+    .camseg { width:100%; } .camseg button { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .pctl { margin:0 auto; }
+  }
   .scard.clip { margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column; max-width:none; }
   .clip .thumbs { display:grid; gap:2px; background:#000; }
   .clip .thumbs.n2 { grid-template-columns:1fr 1fr; } .clip .thumbs.n3 { grid-template-columns:1fr 1fr 1fr; }
@@ -1884,25 +1905,41 @@ function savedCard(g) {
   };
   return card;
 }
-// The player for one clip of a group; the camera buttons switch to the same moment
-// in another camera's clip.
+// The player for one clip of a group. Layout: a header (what this is + download/close),
+// the video with the browser's own controls (play, seek, volume, fullscreen), and one
+// slim bar: the camera switch (same moment in another camera's clip) on the left,
+// skip and speed on the right. Keys: Esc closes, ←/→ skip 5 s, space plays/pauses.
+const ICON_DL = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>';
+const ICON_X = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+const SPEEDS = [[0.25, '¼'], [0.5, '½'], [1, '1'], [2, '2']];
 function playSaved(c, group = [c]) {
+  const t0 = clipStart(c.name);
+  const label = clipKey(c.name).split('-').slice(2).filter(x => x !== 'auto' && x !== 'kept').join(' ');
   const m = document.createElement('div'); m.id = 'modal';
-  m.innerHTML = `<div class="box"><video controls autoplay playsinline></video><p class="hint" id="m_prep"></p>
-    <div class="mbar pbctl"><button class="btn" id="m_back" title="Back 10 seconds">−10 s</button>
-      <label class="sel-lbl">Speed <select id="m_speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
-      <button class="btn" id="m_fwd" title="Forward 10 seconds">+10 s</button></div>
-    <div class="mbar"><span class="camtabs">${group.length > 1 ? group.map((x, i) => `<button class="btn" data-i="${i}">${esc(camName(clipCam(x)))}</button>`).join('') : `<b>${esc(camName(clipCam(c)))}</b>`}</span>
-    <span style="flex:1"></span><a class="btn" id="m_dl" download>Download</a><button class="btn" id="m_close">Close</button></div></div>`;
+  m.innerHTML = `<div class="box player">
+    <div class="phead"><div class="ptitle"><b>${esc(label || (c.auto ? 'Pushed event' : 'Saved clip'))}</b>
+        <span class="sub">${t0 ? `${fmtDay(t0)} · ${fmtTime(t0)}` : ''}</span></div>
+      <a class="ibtn sm" id="m_dl" download title="Download this camera's clip" aria-label="Download">${ICON_DL}</a>
+      <button class="ibtn sm" id="m_close" title="Close (Esc)" aria-label="Close">${ICON_X}</button></div>
+    <video controls autoplay playsinline></video>
+    <p class="hint" id="m_prep"></p>
+    <div class="pbar">
+      ${group.length > 1 ? `<div class="seg camseg" role="group" aria-label="Camera">${group.map((x, i) => `<button data-i="${i}">${esc(camName(clipCam(x)))}</button>`).join('')}</div>`
+                         : `<span class="sub">${esc(camName(clipCam(c)))}</span>`}
+      <div class="pctl">
+        <button class="ibtn sm skip" id="m_back" title="Back 10 s (← 5 s)" aria-label="Back 10 seconds">−10 s</button>
+        <div class="seg speedseg" role="group" aria-label="Speed">${SPEEDS.map(([v, l]) => `<button data-v="${v}" class="${v === 1 ? 'on' : ''}">${l}×</button>`).join('')}</div>
+        <button class="ibtn sm skip" id="m_fwd" title="Forward 10 s (→ 5 s)" aria-label="Forward 10 seconds">+10 s</button>
+      </div></div></div>`;
   const v = m.querySelector('video'), prep = m.querySelector('#m_prep');
-  let poll = null, cur = null;
+  let poll = null, cur = null, rate = 1;
   const show = (x, at = 0) => {
     clearTimeout(poll); cur = x;
     const n = encodeURIComponent(x.name);
     m.querySelector('#m_dl').href = `saved/${n}`;
-    m.querySelectorAll('.camtabs .btn').forEach(b => b.classList.toggle('keep', group[+b.dataset.i] === x));
+    m.querySelectorAll('.camseg button').forEach(b => b.classList.toggle('on', group[+b.dataset.i] === x));
     // WebKit can't play the live transcode (no Range): wait for the seekable copy there.
-    const start = () => { prep.textContent = x.seekable ? '' : 'Preparing a seekable copy of this clip — until it\'s ready you can only seek within what has loaded.';
+    const start = () => { prep.textContent = x.seekable ? '' : 'Preparing a seekable copy — until it\'s ready you can only seek within what has loaded.';
       v.src = `api/saved/${n}/play.mp4`; if (at) v.addEventListener('loadedmetadata', () => { v.currentTime = at; }, { once: true }); v.play().catch(() => {}); };
     if (x.seekable || !RANGED) { start(); return; }
     v.removeAttribute('src'); v.load(); prep.textContent = 'Preparing this clip for playback — a few seconds…';
@@ -1912,13 +1949,22 @@ function playSaved(c, group = [c]) {
     };
     poll = setTimeout(check, 1500);
   };
-  m.querySelectorAll('.camtabs .btn').forEach(b => b.onclick = () => show(group[+b.dataset.i], v.currentTime || 0));
-  const speed = m.querySelector('#m_speed');
-  speed.onchange = () => { v.playbackRate = +speed.value; };
-  v.addEventListener('loadedmetadata', () => { v.playbackRate = +speed.value; });   // keeps it across camera switches
-  m.querySelector('#m_back').onclick = () => { v.currentTime = Math.max(0, v.currentTime - 10); };
-  m.querySelector('#m_fwd').onclick = () => { v.currentTime = Math.min(v.duration || 1e9, v.currentTime + 10); };
-  const close = () => { clearTimeout(poll); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
+  const skip = d => { v.currentTime = clamp(v.currentTime + d, 0, v.duration || 1e9); };
+  m.querySelectorAll('.camseg button').forEach(b => b.onclick = () => show(group[+b.dataset.i], v.currentTime || 0));
+  m.querySelectorAll('.speedseg button').forEach(b => b.onclick = () => {
+    rate = +b.dataset.v; v.playbackRate = rate;
+    m.querySelectorAll('.speedseg button').forEach(x => x.classList.toggle('on', x === b));
+  });
+  v.addEventListener('loadedmetadata', () => { v.playbackRate = rate; });   // keeps it across camera switches
+  m.querySelector('#m_back').onclick = () => skip(-10);
+  m.querySelector('#m_fwd').onclick = () => skip(10);
+  const key = e => {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); skip(e.key === 'ArrowLeft' ? -5 : 5); }
+    else if (e.key === ' ' && e.target === document.body) { e.preventDefault(); v.paused ? v.play() : v.pause(); }
+  };
+  const close = () => { clearTimeout(poll); document.removeEventListener('keydown', key, true); v.pause(); v.removeAttribute('src'); v.load(); m.remove(); };
+  document.addEventListener('keydown', key, true);
   m.onclick = e => { if (e.target === m) close(); };
   m.querySelector('#m_close').onclick = close;
   document.body.appendChild(m);
