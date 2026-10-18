@@ -74,3 +74,19 @@ def test_event_during_analysis_is_queued_not_dropped(tmp_path):
     asyncio.run(run())
     assert seen == [100.0, 110.0]
     assert (tmp_path / "thumbs" / "cam1" / "3.jpg").exists()
+
+
+def test_single_frame_spike_is_not_motion(tmp_path):
+    """Main gate's exposure steps: one frame at 5.2-8.7 between near-zero frames, ~200
+    an hour. Only CONFIRM_FRAMES frames in a row make an event."""
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}],
+                 "motion": {"enabled": True, "sensitivity": 4.0, "min_gap_seconds": 8}})
+    md = MotionDetector(cfg.cameras[0], cfg, EventStore(tmp_path / "e.db"))
+    t = 1000.0
+    for v in (0.02, 5.21, 0.03, 6.94, 0.01, 8.68, 0.02):     # isolated spikes
+        assert md._sample(v, now=t) is False
+        t += 0.2
+    assert md.events == 0
+    assert md._sample(4.5, now=t) is False                    # motion: first frame...
+    assert md._sample(5.0, now=t + 0.2) is True               # ...second in a row -> event
+    assert md._sample(6.0, now=t + 0.4) is False              # same burst: merged (min gap)

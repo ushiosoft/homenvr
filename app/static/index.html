@@ -1126,16 +1126,41 @@ async function loadBoxes(id, T) {
 function unrotate(u, v, rot) {
   return rot === 90 ? [v, 1 - u] : rot === 180 ? [1 - u, 1 - v] : rot === 270 ? [1 - v, u] : [u, v];
 }
+// The boxes at time T: between two burst frames (0.5 s apart) each box is moved
+// linearly from its position in the earlier frame to the same object's in the later
+// one (same kind, best overlap / nearest centre), so it follows the subject at any
+// playback speed instead of jumping twice a second.
+function boxesAt(frames, T) {
+  let i = -1;
+  for (let k = 0; k < frames.length && frames[k].t <= T; k++) i = k;
+  const f0 = i >= 0 ? frames[i] : null, f1 = frames[i + 1] || null;
+  const near0 = f0 && T - f0.t <= 0.6, near1 = f1 && f1.t - T <= 0.6;
+  if (!near0 && !near1) return null;
+  if (!near1 || !near0 || f1.t - f0.t > 0.8) return (near0 && (!near1 || T - f0.t <= f1.t - T) ? f0 : f1).b;
+  const a = (T - f0.t) / (f1.t - f0.t), used = new Set(), out = [];
+  const ctr = b => [(b[1] + b[3]) / 2, (b[2] + b[4]) / 2];
+  for (const b0 of f0.b) {
+    let best = -1, bd = 0.2;   // match within 0.2 of the picture
+    f1.b.forEach((b1, k) => {
+      if (used.has(k) || b1[0] !== b0[0]) return;
+      const [x0, y0] = ctr(b0), [x1, y1] = ctr(b1), d = Math.hypot(x1 - x0, y1 - y0);
+      if (d < bd) { bd = d; best = k; }
+    });
+    if (best >= 0) { used.add(best); const b1 = f1.b[best]; out.push([b0[0], ...[1, 2, 3, 4].map(n => b0[n] + (b1[n] - b0[n]) * a)]); }
+    else if (a < 0.5) out.push(b0);        // gone in the next frame: show until halfway
+  }
+  f1.b.forEach((b1, k) => { if (!used.has(k) && a >= 0.5) out.push(b1); });   // new in the next frame
+  return out;
+}
 function drawBoxes(id) {
   const t = tiles[id], svg = t.el.querySelector('svg.boxes'), v = t.video;
   const T = S.mode === 'review' && showBoxes ? tileTime(id) : null;
-  let frame = null;
-  if (T != null && boxCache[id]) {
-    let best = 0.6;
-    for (const f of boxCache[id].frames) { const d = Math.abs(f.t - T); if (d < best) { best = d; frame = f; } }
+  let boxes = null;
+  if (T != null && boxCache[id] && boxCache[id].frames) {
+    boxes = boxesAt(boxCache[id].frames, T);
     if (T >= boxCache[id].b - 20 || T < boxCache[id].a) loadBoxes(id, T);
   }
-  const key = frame && v.videoWidth ? frame.t + '|' + v._xf.rot + '|' + v.videoWidth : '';
+  const key = boxes && boxes.length && v.videoWidth ? JSON.stringify(boxes) + '|' + v._xf.rot + '|' + v.videoWidth : '';
   if (key === t.boxKey) return;
   t.boxKey = key;
   if (!key) { svg.innerHTML = ''; return; }
@@ -1145,7 +1170,7 @@ function drawBoxes(id) {
   // Small subjects (a rabbit across the yard) are a few pixels: draw at least ~18 px.
   const el = svg.getBoundingClientRect(), scale = Math.min(el.width, el.height) / Math.min(W, H) || 1;
   const minU = 18 / scale, padU = 3 / scale;
-  svg.innerHTML = frame.b.map(([kind, x1, y1, x2, y2]) => {
+  svg.innerHTML = boxes.map(([kind, x1, y1, x2, y2]) => {
     const [ax, ay] = unrotate(x1, y1, rot), [bx, by] = unrotate(x2, y2, rot);
     let X = Math.min(ax, bx) * W - padU, Y = Math.min(ay, by) * H - padU;
     let w = Math.abs(bx - ax) * W + 2 * padU, h = Math.abs(by - ay) * H + 2 * padU;
@@ -1157,6 +1182,12 @@ function drawBoxes(id) {
     return `<rect class="halo" ${geo}></rect><rect class="${kind}" ${geo}></rect>${lbl}`;
   }).join('');
 }
+// Redrawn every animation frame while reviewing (the sync tick, 4 times a second, is
+// too coarse at 2-4x and too visible at 1/4x).
+(function boxLoop() {
+  if (S.mode === 'review' && !document.hidden) for (const c of cameras) if (tiles[c.id]) drawBoxes(c.id);
+  requestAnimationFrame(boxLoop);
+})();
 $('#boxbtn').setAttribute('aria-pressed', showBoxes);
 $('#boxbtn').onclick = () => {
   showBoxes = !showBoxes;
@@ -1220,7 +1251,7 @@ function syncTick() {
   if (loading) { chip.className = 'syncchip wait'; chip.textContent = `loading ${loading} camera${loading > 1 ? 's' : ''}…`; }
   else if (inSync === withFootage) { chip.className = 'syncchip'; chip.textContent = withFootage === cameras.length ? `${withFootage} cameras in sync` : `${withFootage} of ${cameras.length} cameras have footage`; }
   else { chip.className = 'syncchip wait'; chip.textContent = 'syncing…'; }
-  for (const c of cameras) { setBadge(c.id); drawBoxes(c.id); }
+  for (const c of cameras) setBadge(c.id);
   renderClock();
 }
 

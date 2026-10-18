@@ -28,6 +28,11 @@ log = logging.getLogger(__name__)
 _YAVG_RE = re.compile(rb"lavfi\.signalstats\.YAVG=([0-9.]+)")
 ANALYZE_FPS = 5
 ANALYZE_WIDTH = 320
+# Frames in a row the score must reach the threshold for an event (at ANALYZE_FPS: 0.4 s).
+# A single-frame jump is not motion: Main gate's exposure steps (whole-picture
+# brightness changes, ~200/hour in daylight) and decode glitches make exactly that,
+# while anything that really moves changes several frames in a row.
+CONFIRM_FRAMES = 2
 
 
 def sensitivity_for(cam: Camera, cfg: Config) -> float:
@@ -73,8 +78,18 @@ class MotionDetector:
         self._stopping = False
         self._proc: asyncio.subprocess.Process | None = None
         self.last_event_ts = 0.0
+        self._above = 0  # consecutive frames at/above the threshold
         self.events = 0
         self._loop = None
+
+    def _sample(self, score: float, now: float | None = None) -> bool:
+        """Feed one frame's score; records an event (see _record) once CONFIRM_FRAMES
+        frames in a row reach the threshold. Returns True if an event was stored."""
+        if score < sensitivity_for(self.cam, self.cfg):
+            self._above = 0
+            return False
+        self._above += 1
+        return self._above >= CONFIRM_FRAMES and self._record(score, now)
 
     def _record(self, score: float, now: float | None = None) -> bool:
         """Debounce: only one event per min_gap_seconds window. Returns True if stored."""
@@ -124,7 +139,7 @@ class MotionDetector:
                     if not m:
                         continue
                     yavg = float(m.group(1))
-                    if yavg >= sensitivity_for(self.cam, self.cfg) and self._record(yavg):
+                    if self._sample(yavg):
                         log.debug("[%s/motion] event YAVG=%.2f", self.cam.id, yavg)
                 await self._proc.wait()
             except asyncio.CancelledError:
