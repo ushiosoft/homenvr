@@ -105,3 +105,31 @@ def test_analyzer_output_lines_make_events(tmp_path, caplog):
     assert md._line(line(2.0), now=1000) is False          # first frame over 1 %
     assert md._line(line(3.0), now=1000.2) is True         # second in a row -> event
     assert md.events == 1 and "3.00 % of the picture" in caplog.text
+
+
+def test_recording_pass_pushes_what_the_live_burst_missed(tmp_path):
+    """02:21: a car pulled into the driveway; the live burst saw no person (the driver
+    behind the windscreen at night), the 2K recording did -> one late push, not one
+    per event of the same arrival, and never a second push for an event."""
+    import asyncio
+    from app.recorder import Supervisor
+    from app.storage import Storage
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}],
+                 "alerts": {"notifier": "webhook", "webhook_url": "http://x", "motion_push": True,
+                            "push_on": "person", "motion_push_cooldown": 15}})
+    sup = Supervisor(cfg, Storage(tmp_path))
+    sent = []
+
+    async def fake_send(cam, ts, labels, img, eid, note=""):
+        sent.append((eid, note)); sup._motion_push_at[cam.id] = ts; sup._pushed_eids.append(eid)
+    sup._send_push = fake_send
+    cam = cfg.cameras[0]
+
+    async def run():
+        await sup._late_push(cam, 1, 100.0, ["vehicle"], b"")            # no person: nothing
+        await sup._late_push(cam, 2, 110.0, ["person", "vehicle"], b"")  # person: pushed late
+        await sup._late_push(cam, 3, 118.0, ["person"], b"")             # same arrival (cooldown)
+        await sup._late_push(cam, 2, 110.0, ["person"], b"")             # already pushed
+        await sup._late_push(cam, 4, 200.0, ["person"], b"")             # later, separate: pushed
+    asyncio.run(run())
+    assert sent == [(2, " (confirmed on the recording)"), (4, " (confirmed on the recording)")]

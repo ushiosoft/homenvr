@@ -625,6 +625,7 @@ class Supervisor:
         # [0-1 box, bursts seen] — boxes there aren't shown (ObjectDetector.analyze).
         self._fixtures: dict[str, list] = {}
         self._refine_sem = asyncio.Semaphore(1)   # one recording re-analysis at a time
+        self._pushed_eids: deque = deque(maxlen=500)   # events already pushed (no late re-push)
         self._refining: set[asyncio.Task] = set()
         self.converter = None  # clips.ClipConverter, set by the app: auto-saved clips get a seekable copy
         self.autosaver = None  # clips.AutoSaver, set in start()
@@ -696,14 +697,7 @@ class Supervisor:
             if push_now and not should_push(policy, labels):
                 log.debug("[%s] not pushed (push_on=%s, labels=%s)", cam_id, policy, labels or "none")
             elif push_now:
-                self._motion_push_at[cam_id] = ts
-                from .alerts import make_notifier, review_link
-                when = time.strftime("%H:%M:%S", time.localtime(ts))
-                what = " + ".join(labels).title() if labels else "Motion"
-                await asyncio.to_thread(make_notifier(a).send_image, f"{what} — {cam.name}",
-                                        f"Detected at {when}", img, f"{cam_id}-{int(ts)}.jpg",
-                                        review_link(a.public_url, cam_id, ts))
-                log.info("[%s] motion push sent (%s)", cam_id, what)
+                await self._send_push(cam, ts, labels, img, eid)
         except Exception as e:
             log.warning("[%s] motion handling failed: %s", cam_id, redact(str(e)))
         finally:
@@ -771,8 +765,39 @@ class Supervisor:
                 from .detect import draw_boxes
                 img = await asyncio.to_thread(draw_boxes, frames[i], boxes[i])
                 await asyncio.to_thread(save_thumb, self.storage.thumb_path(cam.id, eid), img)
+            await self._late_push(cam, eid, ts, labels, img)
         except Exception as e:  # noqa: BLE001 - the live result stays
             log.debug("[%s] recording re-analysis of event %s failed: %s", cam.id, eid, e)
+
+    async def _send_push(self, cam, ts: float, labels: list[str], img: bytes, eid: int | None,
+                         note: str = "") -> None:
+        a = self.cfg.alerts
+        self._motion_push_at[cam.id] = ts
+        if eid is not None:
+            self._pushed_eids.append(eid)
+        from .alerts import make_notifier, review_link
+        when = time.strftime("%H:%M:%S", time.localtime(ts))
+        what = " + ".join(labels).title() if labels else "Motion"
+        await asyncio.to_thread(make_notifier(a).send_image, f"{what} — {cam.name}",
+                                f"Detected at {when}{note}", img, f"{cam.id}-{int(ts)}.jpg",
+                                review_link(a.public_url, cam.id, ts))
+        log.info("[%s] motion push sent (%s%s)", cam.id, what, note)
+
+    async def _late_push(self, cam, eid: int, ts: float, labels: list[str], img: bytes) -> None:
+        """The recording pass found what the push rule asks for (a person, say) and the
+        live burst had missed it — a driver behind a windscreen at night, seen in the 2K
+        recording but not in the live sub-stream. Push now, unless this event was pushed
+        already or the camera's push cooldown says no."""
+        a = self.cfg.alerts
+        if not (a.motion_push and a.notifier != "none") or eid in self._pushed_eids:
+            return
+        if not should_push(cam.push_on or a.push_on, labels):
+            return
+        if a.motion_push_cooldown and ts - self._motion_push_at.get(cam.id, 0.0) < a.motion_push_cooldown:
+            return
+        await self._send_push(cam, ts, labels, img, eid, " (confirmed on the recording)")
+        if self.autosaver is not None:
+            self.autosaver.pushed(cam.id, ts)
 
     def _remember_fixtures(self, cam_id: str, found: list) -> None:
         from .detect import iou
