@@ -566,8 +566,10 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     async def server_config():
         """config.yml and the environment it reads (.env), secrets masked — for the
         read-only card on the Settings page."""
+        from . import settings as s
         from .serverinfo import describe
-        return await asyncio.to_thread(describe)
+        overlay = await asyncio.to_thread(s.load_overlay, s.settings_path(cfg))
+        return await asyncio.to_thread(describe, None, cfg, overlay)
 
     @app.post("/api/restart")
     async def restart():

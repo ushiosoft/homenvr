@@ -321,6 +321,7 @@
   .keepbox { width:min(92vw,420px); }
   .keepcams { display:flex; flex-direction:column; gap:8px; margin:6px 0 12px; }
   .cfgtext { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:12px/1.5 var(--mono); max-height:420px; overflow:auto; white-space:pre; margin:10px 0; }
+  .cfgraw { margin:4px 0 8px; } .cfgraw summary { cursor:pointer; color:var(--muted); font-size:13px; padding:4px 0; }
   .envtable { display:grid; grid-template-columns:max-content 1fr; gap:2px 16px; font-size:12px; margin-top:8px; }
   .envtable .k { color:var(--muted); }
   #modal { position:fixed; inset:0; z-index:100; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.82); padding:16px; }
@@ -2034,9 +2035,10 @@ async function renderSettings() {
     </div>
     <div class="scard">
       <h3>Server configuration</h3>
-      <p class="hint">Read-only: what homenvr started with — <span class="mono" id="sc_path">config.yml</span> and the environment from <span class="mono">.env</span>. Secrets are masked. Changes there are made on the server and apply after a restart.</p>
-      <div id="sc_env" class="envtable"></div>
-      <pre class="cfgtext" id="sc_cfg">Loading…</pre>
+      <p class="hint">Read-only. What homenvr is running with: <span class="mono" id="sc_path">config.yml</span> on the server, with the changes made on this page applied on top (marked <span class="mono"># set in Settings</span>). Secrets are masked. config.yml and <span class="mono">.env</span> are edited on the server and apply after a restart.</p>
+      <pre class="cfgtext" id="sc_eff">Loading…</pre>
+      <details class="cfgraw"><summary>config.yml as written on the server</summary><pre class="cfgtext" id="sc_cfg"></pre></details>
+      <details class="cfgraw"><summary>Environment (.env)</summary><div id="sc_env" class="envtable"></div></details>
       <div class="frow"><button class="btn" id="s_restart">Restart homenvr</button><span class="sub" id="s_rsmsg">Recording pauses for ~10 s while it restarts.</span></div>
     </div>`;
   const syncNotifierFields = () => {
@@ -2068,8 +2070,9 @@ async function renderSettings() {
   api('api/server-config').then(sc => {
     $('#sc_path').textContent = sc.config_path;
     $('#sc_cfg').textContent = sc.config;
+    $('#sc_eff').textContent = sc.effective || sc.config;
     $('#sc_env').innerHTML = sc.env.map(e => `<span class="mono k">${esc(e.key)}</span><span class="mono">${esc(e.value)}</span>`).join('');
-  }).catch(() => { $('#sc_cfg').textContent = 'Failed to load.'; });
+  }).catch(() => { $('#sc_eff').textContent = 'Failed to load.'; });
   $('#s_restart').onclick = async () => {
     if (!confirm('Restart homenvr now? Recording and live view pause for ~10 s.')) return;
     const msg = $('#s_rsmsg'), btn = $('#s_restart');

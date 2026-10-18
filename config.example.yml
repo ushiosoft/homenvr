@@ -36,7 +36,7 @@ motion:                # server-side motion detection -> timeline markers (no NV
   detect_confidence: 0.45
 
 alerts:                # notify when a camera stops recording / disk fills
-  notifier: none       # none | ntfy | webhook | smtp
+  notifier: none       # none | ntfy | webhook | telegram | smtp (also settable on the Settings page)
   # ntfy_url: https://ntfy.sh/your-private-topic   # for notifier: ntfy
   # webhook_url: https://discord.com/api/webhooks/...  # notifier: webhook (Discord/Slack)
   # telegram: {bot_token: "123:ABC", chat_id: "123456789"}  # notifier: telegram

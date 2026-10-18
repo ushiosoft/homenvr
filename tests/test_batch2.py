@@ -106,3 +106,17 @@ def test_keep_and_list_auto(tmp_path):
         assert c.get("/api/saved").json()[0]["auto"] is False
         assert c.post("/api/saved/cam1-20261015-120000-kept.mp4/keep").status_code == 404
         assert c.get("/api/server-config").status_code == 200
+
+
+def test_effective_config_shows_settings_overlay(tmp_path):
+    from app import settings as s
+    from app.serverinfo import effective
+    cfg = parse({"storage_dir": str(tmp_path), "alerts": {"notifier": "none"},
+                 "cameras": [{"id": "cam1", "record_url": "rtsp://u:pw@nvr/1", "live_url": "l"}]})
+    s.update(cfg, tmp_path / "settings.json", {"alerts": {"notifier": "webhook", "webhook_url": "https://discord.com/api/webhooks/1/SECRET"},
+                                               "cameras": {"cam1": {"rotation": 90}}})
+    out = effective(cfg, s.load_overlay(tmp_path / "settings.json"))
+    assert "notifier: webhook  # set in Settings" in out
+    assert "SECRET" not in out and "webhook_url: " + MASK in out
+    assert "rotation: 90" in out and "# set in Settings: rotation" in out
+    assert "pw@" not in out
