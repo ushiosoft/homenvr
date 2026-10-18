@@ -959,6 +959,41 @@ function hevcSupported() {
   }
   return _hevc;
 }
+// What a tile plays from time T: direct play (the original 2K, stream-copied: always
+// for H.264, for H.265 where the browser decodes it) from the keyframe before T, else
+// the H.264 transcode from exactly T. No side effects: also used to pre-load the
+// next window (prefetchNext).
+async function windowSrc(id, T, cov = covered(id, T)) {
+  const t = tiles[id];
+  let start = T, direct = $('#quality').value !== 'compat' && !t.forceCompat, target = null, codec = null;
+  if (direct) {
+    try {
+      const k = await api(`api/cameras/${id}/keyframe?ts=${T}`);
+      codec = k.codec;
+      if (k.codec === 'hevc') direct = useDirect();
+      else if (k.codec !== 'h264') direct = false;
+      if (direct) { start = k.ts; if (T - k.ts > 0.2) target = T; }
+    } catch (e) { direct = false; }
+  }
+  // Ranged files are cut before the first byte is sent: short windows keep that ~1 s
+  // for a stream copy; transcoding is slower still, so even shorter.
+  const win = RANGED ? (direct ? 60 : 20) : PLAY_WINDOW;
+  const dur = clamp(Math.ceil((cov.until || T + win) - start) + 2, 5, win);
+  const height = !direct && tileIsLarge(id) ? 720 : 480;
+  const src = (direct ? `api/cameras/${id}/remux.mp4?start=${start.toFixed(3)}&dur=${dur}`
+                      : `api/cameras/${id}/playback.mp4?start=${start.toFixed(3)}&dur=${dur}&height=${height}`) + (RANGED ? '&file=1' : '');
+  return { start, direct, target, codec, height, src };
+}
+// Ranged (Safari / iPhone / iPad) windows are files the server cuts on request (~1 s):
+// with a few seconds left, have it cut the next one, so going on is instant.
+function prefetchNext(id) {
+  const t = tiles[id], v = t.video;
+  if (!t.ranged || t.prefetched || t.state !== 'playing' || !v.duration || v.duration - v.currentTime > 8) return;
+  t.prefetched = true;
+  const T = t.start + v.duration;
+  if (T > nowS() - 30 || !covered(id, T).ok) return;
+  windowSrc(id, T).then(w => fetch(w.src, { headers: { Range: 'bytes=0-1' } })).catch(() => {});
+}
 async function loadTile(id, T) {
   const t = tiles[id], v = t.video, gen = (t.gen = (t.gen || 0) + 1);
   t.target = null; t.ff = false;
@@ -971,29 +1006,14 @@ async function loadTile(id, T) {
   }
   t.state = 'loading'; t.loadAt = performance.now();
   setOverlay(id, '<span class="spin"></span>Loading recording…');
-  // Direct play (original 2K, no server transcode): always for H.264 recordings,
-  // which every browser plays; for H.265 only where the browser can (useDirect).
-  let start = T, direct = $('#quality').value !== 'compat' && !t.forceCompat;
-  if (direct) {
-    try {
-      const k = await api(`api/cameras/${id}/keyframe?ts=${T}`);
-      if (gen !== t.gen) return;
-      t.codec = k.codec;
-      if (k.codec === 'hevc') direct = useDirect();
-      else if (k.codec !== 'h264') direct = false;
-      if (direct) { start = k.ts; if (T - k.ts > 0.2) t.target = T; }
-    } catch (e) { if (gen !== t.gen) return; direct = false; }
-  }
-  // Ranged files are cut before the first byte is sent: short windows keep that ~1 s
-  // for a stream copy; transcoding is slower still, so even shorter.
-  const win = RANGED ? (direct ? 60 : 20) : PLAY_WINDOW;
-  const dur = clamp(Math.ceil(cov.until - start) + 2, 5, win);
-  t.start = start; t.direct = direct; t.ranged = RANGED;
-  t.height = !direct && tileIsLarge(id) ? 720 : 480;
-  v._xf.rot = direct ? (camRot[id] || 0) : 0;
+  const w = await windowSrc(id, T, cov);
+  if (gen !== t.gen) return;
+  if (w.codec) t.codec = w.codec;
+  t.target = w.target;
+  t.start = w.start; t.direct = w.direct; t.ranged = RANGED; t.height = w.height; t.prefetched = false;
+  v._xf.rot = w.direct ? (camRot[id] || 0) : 0;
   applyXform(v);
-  v.src = (direct ? `api/cameras/${id}/remux.mp4?start=${start.toFixed(3)}&dur=${dur}`
-                  : `api/cameras/${id}/playback.mp4?start=${start.toFixed(3)}&dur=${dur}&height=${t.height}`) + (RANGED ? '&file=1' : '');
+  v.src = w.src;
   v.muted = !(S.sound && id === S.selCam);
   v.playbackRate = S.speed;
   loadBoxes(id, T);
@@ -1212,6 +1232,7 @@ function syncTick() {
       continue;
     }
     if (t.state === 'loading') continue;
+    prefetchNext(c.id);
     withFootage++;
     if (t.target != null) { reachTarget(c.id); inSync++; continue; }  // still skipping its lead-in
     if (S.paused) { if (!v.paused) v.pause(); t.state = 'paused'; inSync++; continue; }

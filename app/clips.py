@@ -56,26 +56,43 @@ async def clip_start(storage: Storage, cam_id: str, start: float) -> float:
 
 async def build_clip(storage: Storage, cam_id: str, start: float, end: float, out: Path,
                      max_seconds: float) -> None:
-    """Stream-copy the [start, end) range (active + grace) into `out` (faststart MP4)."""
+    """Stream-copy the [start, end) range (active + grace) into `out` (faststart MP4).
+
+    The first file is cut with an input seek just past its keyframe (exact; a concat
+    inpoint lands seconds early in a restart's first file); later files start at their
+    beginning, so they're joined without inpoints."""
     if end <= start or end - start > max_seconds:
         raise ClipError(400, f"range must be 0-{max_seconds:.0f}s")
     start = await clip_start(storage, cam_id, start)
-    script = storage.concat_list(cam_id, start, end)
-    if script.count("\nfile ") == 0:
+    parts = await asyncio.to_thread(storage.window_parts, cam_id, start, end)
+    if not parts:
         raise ClipError(404, "no recordings in range")
-    fd, lst = tempfile.mkstemp(suffix=".ffconcat")
-    with os.fdopen(fd, "w") as f:
-        f.write(script)
+    tmp = Path(tempfile.mkdtemp(prefix="clip-"))
     try:
-        proc = await asyncio.create_subprocess_exec(
-            FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-safe", "0", "-f", "concat",
-            "-i", lst, "-map", "0", "-c", "copy", "-movflags", "+faststart", "-f", "mp4", str(out),
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, err = await proc.communicate()
+        path, off, length = parts[0]
+        first = out if len(parts) == 1 else tmp / "first.mp4"
+        await _ffmpeg(["-ss", f"{off + 0.05:.3f}", "-i", str(path), "-t", f"{length:.3f}", "-map", "0",
+                       "-c", "copy", "-avoid_negative_ts", "make_zero", "-movflags", "+faststart", "-f", "mp4", str(first)])
+        if len(parts) > 1:
+            lines = ["ffconcat version 1.0", f"file '{first.as_posix()}'"]
+            for i, (p, _off, n) in enumerate(parts[1:], 1):
+                lines.append(f"file '{p.as_posix()}'")
+                if i == len(parts) - 1:
+                    lines.append(f"outpoint {n:.3f}")
+            (tmp / "list.ffconcat").write_text("\n".join(lines) + "\n")
+            await _ffmpeg(["-safe", "0", "-f", "concat", "-i", str(tmp / "list.ffconcat"), "-map", "0", "-c", "copy",
+                           "-movflags", "+faststart", "-f", "mp4", str(out)])
     finally:
-        os.unlink(lst)
-    if proc.returncode != 0 or not out.exists():
+        for f in tmp.iterdir():
+            f.unlink(missing_ok=True)
+        tmp.rmdir()
+
+
+async def _ffmpeg(args: list[str]) -> None:
+    proc = await asyncio.create_subprocess_exec(FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *args,
+                                                stderr=asyncio.subprocess.PIPE)
+    _, err = await proc.communicate()
+    if proc.returncode != 0:
         raise ClipError(500, err.decode(errors="replace")[-500:])
 
 

@@ -191,3 +191,13 @@ def test_direct_play_starts_on_the_asked_keyframe(tmp_path):
                                   "-show_entries", "packet=pts_time", "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout
             assert float(pts.split()[0]) >= -0.06, (k, pts)
             assert duration(out) == pytest.approx(4.0, abs=0.3)
+
+
+def test_build_clip_across_two_files(tmp_path):
+    s = Storage(tmp_path)
+    p = recording(tmp_path)
+    q = p.with_name(f"{format_stamp(BASE + 20)}.mp4"); shutil.copy(p, q); os.utime(q, (BASE + 40, BASE + 40))
+    out = tmp_path / "x.mp4"
+    asyncio.run(clips.build_clip(s, "cam1", BASE + 15.0, BASE + 27.0, out, 3600))
+    assert first_pts_and_key(out).startswith("K")
+    assert duration(out) == pytest.approx(13.0, abs=0.3)      # from the keyframe at 14 s to 27 s

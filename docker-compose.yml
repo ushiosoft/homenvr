@@ -14,6 +14,11 @@ services:
       - ${RECORDINGS_DIR:-./recordings}:/recordings
     tmpfs:
       - /tmp/homenvr-live:size=256m   # live-view HLS segments; RAM only
+    networks:
+      default:
+        # The Tailscale sidecar's hostname is "homenvr" (its tailnet name), so inside it
+        # "homenvr" resolves to itself; it proxies to this alias instead.
+        aliases: [homenvr-app]
 
   # Low-latency WebRTC live view (~1 s instead of ~6 s HLS). homenvr registers the
   # camera streams and proxies signalling; only the media port is published.
@@ -29,3 +34,33 @@ services:
       - "8555:8555/udp"
     volumes:
       - ./go2rtc.yaml:/config/go2rtc.yaml:ro
+
+  # Optional remote access over your private Tailscale network (tailnet): no ports
+  # forwarded, no Hik cloud. Off unless the "tailscale" profile is on — put
+  #   COMPOSE_PROFILES=tailscale
+  #   TS_AUTHKEY=tskey-auth-xxxxx   (https://login.tailscale.com/admin/settings/keys)
+  # in .env, then `docker compose up -d`. Open https://homenvr.<your-tailnet>.ts.net.
+  # See docs/remote-access.md.
+  tailscale:
+    image: tailscale/tailscale:v1.80.3
+    container_name: homenvr-tailscale
+    profiles: [tailscale]
+    hostname: homenvr
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      # Pin the tailnet name (and pass it on every start): without it, a hostname set
+      # with `tailscale set --hostname` makes the container's `tailscale up` refuse to
+      # start ("requires mentioning all non-default flags").
+      TS_HOSTNAME: homenvr
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+      TS_SERVE_CONFIG: /config/ts-serve.json
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./ts-serve.json:/config/ts-serve.json:ro
+    depends_on:
+      - homenvr
+    restart: unless-stopped
+
+volumes:
+  ts-state:

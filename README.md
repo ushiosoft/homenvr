@@ -86,8 +86,7 @@ cd hikvision-homenvr
 cp .env.example .env              # set NVR_PASSWORD, UI_PASSWORD, TZ, RECORDINGS_DIR
 cp config.example.yml config.yml  # set NVR host + cameras
 docker compose up -d --build
-# with remote access (Tailscale; set TS_AUTHKEY in .env):
-docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d --build
+# with remote access: set COMPOSE_PROFILES=tailscale and TS_AUTHKEY in .env, then the same command
 ```
 
 Open `http://<host>:8971` (or from your phone on the same network). Log in with
@@ -197,7 +196,8 @@ codec is re-checked every 10 minutes; restart homenvr to apply at once).
   data in `/srv/cctv` (`RECORDINGS_DIR`: recordings, `grace/`, `saved/`,
   `thumbs/`, `events.db`, `settings.json`).
 - Deploy:
-  `cd ~/srv/homenvr && git pull && docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d --build`.
+  `cd ~/srv/homenvr && git pull && docker compose up -d --build` (the server's `.env` has
+  `COMPOSE_PROFILES=tailscale`, which brings up the Tailscale sidecar too).
   When `go2rtc.yaml` changed, add `--force-recreate go2rtc` (git replaces the file;
   a bind-mounted single file keeps pointing at the old one).
 - Containers: `homenvr` (UI/API on :8971), `homenvr-go2rtc` (WebRTC media on 8555

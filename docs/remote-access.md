@@ -49,11 +49,12 @@ automatic tailnet TLS cert):
    ```
 3. Start with the overlay:
    ```bash
-   docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d
+   docker compose up -d        # with COMPOSE_PROFILES=tailscale in .env
    ```
 4. Open **https://homenvr.<your-tailnet>.ts.net** from any device on the tailnet.
 
-The sidecar (`docker-compose.tailscale.yml` + `ts-serve.json`) proxies the
+The sidecar (the `tailscale` service in `docker-compose.yml`, profile `tailscale`, +
+`ts-serve.json`) proxies the
 tailnet to homenvr over the internal Docker network; your LAN access on `:8971`
 keeps working unchanged. Verified: the sidecar boots in userspace mode and
 registers with the Tailscale control plane; the only input it needs is your
