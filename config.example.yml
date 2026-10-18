@@ -30,7 +30,7 @@ ui:
 
 motion:                # server-side motion detection -> timeline markers (no NVR changes)
   enabled: true
-  sensitivity: 4.0     # frame-difference brightness threshold (0-255); lower = more sensitive
+  sensitivity: 1.0     # % of the picture that must clearly change (0.4 s); lower = more sensitive
   min_gap_seconds: 8   # merge a burst of motion into one event
   detect: true         # label events person/vehicle (on-server object detection)
   detect_confidence: 0.45

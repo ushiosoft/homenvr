@@ -335,8 +335,8 @@ def moving_blobs(mask, cv2, np, explained, zones=None) -> list[tuple[int, int, i
         if any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in explained):
             continue
         if zones:
-            from .zones import inside
-            if any(inside(cx / w, cy / h, z) for z in zones):
+            from .zones import inside, motion_polys
+            if any(inside(cx / w, cy / h, z) for z in motion_polys(zones)):
                 continue
         out.append((x, y, x + bw, y + bh))
     return out

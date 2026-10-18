@@ -117,12 +117,12 @@ def test_incidents_and_dismiss_api(tmp_path):
     store = EventStore(cfg.events_db)
     a = store.add("cam1", T0, "motion", 30.0)
     store.add("cam1", T0 + 20, "motion", 30.0)
-    b = store.add("cam3", T0 + 1000, "motion", 4.2)
+    b = store.add("cam3", T0 + 1000, "motion", 1.2)   # weak: under 2x the threshold (1 %)
     with c:
         r = c.get("/api/incidents", params={"start": T0 - 10, "end": T0 + 2000}).json()
         assert [i["n"] for i in r["items"]] == [1, 2]
         assert r["items"][0]["likely_noise"] and r["items"][0]["path"] == "Backyard"
-        assert r["thresholds"] == {"cam1": 4.0, "cam3": 4.0}
+        assert r["thresholds"] == {"cam1": 1.0, "cam3": 1.0}
         assert c.post("/api/incidents/dismiss", json={"event_ids": [b]}).json() == {"updated": 1}
         r = c.get("/api/incidents", params={"start": T0 - 10, "end": T0 + 2000}).json()
         assert [i["id"] for i in r["items"]] == [f"i{a}"]

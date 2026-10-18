@@ -14,7 +14,7 @@ TOP = [[0, 0], [1, 0], [1, 0.3], [0, 0.3]]   # top 30 % of the displayed picture
 def test_validate_and_settings_roundtrip(tmp_path):
     cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
     update(cfg, tmp_path / "s.json", {"cameras": {"cam1": {"zones": [[[0, 0], [1, 0], [0.5, 0.123456]]]}}})
-    assert cfg.cameras[0].zones == [[[0.0, 0.0], [1.0, 0.0], [0.5, 0.1235]]]
+    assert cfg.cameras[0].zones == [{"points": [[0.0, 0.0], [1.0, 0.0], [0.5, 0.1235]], "motion": True, "detect": True}]
     for bad in ([[[0, 0], [1, 1]]], [[[0, 0], [2, 0], [1, 1]]], "x", [TOP] * 9):
         with pytest.raises(ValueError):
             zones.validate(bad)
@@ -57,3 +57,21 @@ def test_masked_motion_scores_nothing_inside_the_zone(tmp_path, monkeypatch):
     assert peak(zones.motion_mask([TOP], 0, 320, 180, tmp_path / "m.png")) < 0.05
     # A zone elsewhere leaves the score as it was.
     assert peak(zones.motion_mask([[[0, 0.6], [1, 0.6], [1, 1], [0, 1]]], 0, 320, 180, tmp_path / "n.png")) == pytest.approx(peak(None), rel=0.05)
+
+
+def test_zone_kinds(tmp_path):
+    """A street zone that ignores only detections still lets motion through (someone
+    on the sidewalk, partly in front of the street, triggers); a BBQ zone that
+    ignores only motion still lets a person standing there count."""
+    cv2 = pytest.importorskip("cv2")
+    street = {"points": TOP, "motion": False, "detect": True}
+    bbq = {"points": [[0, 0.6], [1, 0.6], [1, 1], [0, 1]], "motion": True, "detect": False}
+    assert zones.validate([street, bbq])[0]["motion"] is False
+    with pytest.raises(ValueError):
+        zones.validate([{"points": TOP, "motion": False, "detect": False}])
+    assert zones.ignored((100, 10, 300, 100), 640, 360, [street])              # car on the street: ignored
+    assert not zones.ignored((100, 250, 140, 340), 640, 360, [bbq])           # person at the BBQ: counts
+    m = cv2.imread(str(zones.motion_mask([street, bbq], 0, 320, 180, tmp_path / "k.png")), cv2.IMREAD_GRAYSCALE)
+    assert m[10, 160] == 255 and m[170, 160] == 0                             # street open, BBQ masked
+    # The older form (a bare polygon) still means both.
+    assert zones.ignored((100, 10, 300, 100), 640, 360, [TOP]) and zones.motion_polys([TOP]) == [TOP]

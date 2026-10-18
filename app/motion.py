@@ -1,7 +1,7 @@
 """Server-side motion detection on the camera sub-stream (no NVR changes).
 
 Runs a lightweight ffmpeg scene-score analysis on the low-res sub-stream and
-records a motion event whenever frame-to-frame change exceeds the sensitivity
+records a motion event whenever the share of the picture that changed exceeds the threshold
 threshold. Events are debounced (a burst of motion = one event) and written to
 the shared EventStore for the smart timeline.
 
@@ -23,8 +23,15 @@ from .recorder import FALLBACK_RETRY_SECONDS, FFMPEG, input_args, pick_source, r
 
 log = logging.getLogger(__name__)
 
-# Average brightness of the inter-frame difference image (0-255). Static scene -> ~0,
-# any real motion -> rises. A far better motion signal than scene-cut detection.
+# The score: the share of the picture (%) whose brightness changed by more than
+# CHANGE_LEVEL between analysed frames (after a light blur against sensor noise).
+# Something that moves changes its own pixels a lot, so it counts in proportion to
+# its size wherever it is; a camera's exposure step or a keyframe's quality pulse
+# shifts every pixel a little, so it counts for (almost) nothing. The previous score,
+# the mean change over the whole picture, was the other way round: a person walking
+# two dogs across the street averaged ~1.5 (under the threshold) while exposure
+# steps scored 5-9. ffmpeg reports it as signalstats' YAVG of a 0/255 image.
+CHANGE_LEVEL = 25
 _YAVG_RE = re.compile(rb"lavfi\.signalstats\.YAVG=([0-9.]+)")
 ANALYZE_FPS = 5
 ANALYZE_WIDTH = 320
@@ -49,22 +56,29 @@ def analyze_height(width: int | None, height: int | None) -> int:
 
 def motion_cmd(cam: Camera, cfg: Config, url: str | None = None, mask: Path | None = None,
                height: int = 180) -> list[str]:
-    """The analyzer: frame differences at ANALYZE_FPS, scored by their mean brightness.
-    With a mask (the camera's ignore zones, app/zones.py) the difference is multiplied
-    by it first, so changes inside a zone score nothing."""
+    """The analyzer: frame differences at ANALYZE_FPS, thresholded at CHANGE_LEVEL and
+    scored by the share of changed pixels (see score()). With a mask (the camera's
+    ignore zones, app/zones.py) the difference is multiplied by it first, so changes
+    inside a zone score nothing."""
     head = [FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info",
             *input_args(url or cam.live_url, cfg.rtsp_transport)]
-    scale = f"fps={ANALYZE_FPS},scale={ANALYZE_WIDTH}:{height}"
+    scale = f"fps={ANALYZE_FPS},scale={ANALYZE_WIDTH}:{height},gblur=sigma=1"
+    changed = f"lutyuv=y=if(gt(val\\,{CHANGE_LEVEL})\\,255\\,0),signalstats,metadata=print"
     if mask is None:
-        return [*head, "-an", "-vf", f"{scale},tblend=all_mode=difference,signalstats,metadata=print",
+        return [*head, "-an", "-vf", f"{scale},tblend=all_mode=difference,{changed}",
                 "-f", "null", "-"]
     # One still image as the second input: blend keeps applying its last frame. The
     # mask is declared limited-range so its 0/255 survive the conversion to YUV as
     # they are (otherwise white becomes 235 and every score drops ~8 %).
     graph = (f"[0:v]{scale},tblend=all_mode=difference[d];"
              f"[1:v]format=gray,scale=in_range=tv:out_range=tv,format=yuv420p[m];"
-             f"[d][m]blend=all_mode=multiply,signalstats,metadata=print")
+             f"[d][m]blend=all_mode=multiply,{changed}")
     return [*head, "-i", str(mask), "-an", "-filter_complex", graph, "-f", "null", "-"]
+
+
+def score(yavg: float) -> float:
+    """signalstats' YAVG of the thresholded difference -> % of the picture changed."""
+    return yavg * 100.0 / 255.0
 
 
 class MotionDetector:
@@ -121,8 +135,8 @@ class MotionDetector:
                         FALLBACK_RETRY_SECONDS, lambda: self._proc and self._proc.returncode is None and self._proc.kill())
                 height = analyze_height(info.get("width"), info.get("height"))
                 mask = None
-                if self.cam.zones:
-                    from .zones import motion_mask
+                from .zones import motion_mask, motion_polys
+                if motion_polys(self.cam.zones):
                     mask = await asyncio.to_thread(
                         motion_mask, self.cam.zones, self.cam.rotation, ANALYZE_WIDTH, height,
                         Path(self.cfg.live_dir) / f"{self.cam.id}-motion-mask.png")
@@ -138,8 +152,7 @@ class MotionDetector:
                     m = _YAVG_RE.search(line)
                     if not m:
                         continue
-                    yavg = float(m.group(1))
-                    if self._sample(yavg):
+                    if self._sample(score(float(m.group(1)))):
                         log.debug("[%s/motion] event YAVG=%.2f", self.cam.id, yavg)
                 await self._proc.wait()
             except asyncio.CancelledError:

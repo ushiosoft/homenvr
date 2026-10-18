@@ -29,7 +29,7 @@ def labels_of(e: dict) -> list[str]:
 def is_weak(e: dict, thresholds: dict[str, float]) -> bool:
     if labels_of(e):
         return False
-    thr = thresholds.get(e["camera"], 4.0) or 4.0
+    thr = thresholds.get(e["camera"], 1.0) or 1.0
     return float(e.get("score") or 0) < WEAK_FACTOR * thr
 
 

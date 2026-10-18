@@ -1,4 +1,4 @@
-"""Per-camera ignore zones: polygons where motion and objects don't count.
+"""Per-camera ignore zones: polygons where motion and/or objects don't count.
 
 Drawn on the Settings page over a snapshot of the camera *as displayed* (after
 its rotation), stored as normalized [x, y] points (0-1) in camera.zones.
@@ -7,8 +7,13 @@ its rotation), stored as normalized [x, y] points (0-1) in camera.zones.
   centre of the box) lies in a zone — a car driving on the street at the top of
   the picture, or beyond the gate, never becomes a label or a push.
 - Motion: the zones are blacked out of the frame difference before it's scored
-  (app/motion.py), so movement there makes no events. Motion elsewhere scores the
-  same as before: masked pixels only add zeros to the whole-frame average.
+  (app/motion.py), so movement there makes no events.
+
+Each zone says which of the two it ignores: {"points": [[x, y], ...], "motion": bool,
+"detect": bool} (a bare list of points is the older form: both). Ignoring only
+detections suits a street (no vehicle labels or pushes, but someone walking along the
+sidewalk, partly in front of it, still triggers); ignoring only motion suits something
+that moves where people still stand (a BBQ cover in the wind).
 """
 from __future__ import annotations
 
@@ -18,12 +23,33 @@ MAX_ZONES = 8
 MAX_POINTS = 32
 
 
-def validate(value) -> list[list[list[float]]]:
+def points(z) -> list:
+    return z["points"] if isinstance(z, dict) else z
+
+
+def ignores_motion(z) -> bool:
+    return z.get("motion", True) if isinstance(z, dict) else True
+
+
+def ignores_detect(z) -> bool:
+    return z.get("detect", True) if isinstance(z, dict) else True
+
+
+def motion_polys(zones) -> list:
+    return [points(z) for z in zones or [] if ignores_motion(z)]
+
+
+def detect_polys(zones) -> list:
+    return [points(z) for z in zones or [] if ignores_detect(z)]
+
+
+def validate(value) -> list[dict]:
     """Coerce/validate a zones value from the settings API (raises ValueError)."""
     if not isinstance(value, list) or len(value) > MAX_ZONES:
         raise ValueError(f"zones must be a list of at most {MAX_ZONES} polygons")
     out = []
-    for poly in value:
+    for z in value:
+        poly = points(z)
         if not isinstance(poly, list) or not 3 <= len(poly) <= MAX_POINTS:
             raise ValueError(f"a zone needs 3-{MAX_POINTS} points")
         pts = []
@@ -32,7 +58,10 @@ def validate(value) -> list[list[list[float]]]:
             if not (0 <= x <= 1 and 0 <= y <= 1):
                 raise ValueError("zone points must be within 0-1")
             pts.append([round(x, 4), round(y, 4)])
-        out.append(pts)
+        m, d = ignores_motion(z), ignores_detect(z)
+        if not (m or d):
+            raise ValueError("a zone must ignore motion, detections, or both")
+        out.append({"points": pts, "motion": bool(m), "detect": bool(d)})
     return out
 
 
@@ -50,11 +79,12 @@ def inside(x: float, y: float, poly) -> bool:
 
 def ignored(box, width: int, height: int, zones) -> bool:
     """True if a detection box (pixels, in the displayed frame) stands in a zone."""
-    if not zones or not width or not height:
+    polys = detect_polys(zones)
+    if not polys or not width or not height:
         return False
     x1, _y1, x2, y2 = box
     gx, gy = (x1 + x2) / 2 / width, min(y2, height - 1) / height
-    return any(inside(gx, gy, z) for z in zones)
+    return any(inside(gx, gy, z) for z in polys)
 
 
 def motion_mask(zones, rotation: int, width: int, height: int, path: Path) -> Path:
@@ -66,7 +96,7 @@ def motion_mask(zones, rotation: int, width: int, height: int, path: Path) -> Pa
     rot = int(rotation) % 360
     dw, dh = (height, width) if rot in (90, 270) else (width, height)
     m = np.full((dh, dw), 255, np.uint8)
-    for z in zones:
+    for z in motion_polys(zones):
         pts = np.array([[round(x * (dw - 1)), round(y * (dh - 1))] for x, y in z], np.int32)
         cv2.fillPoly(m, [pts], 0)
     # Displayed = stream rotated clockwise by `rot`; undo it.

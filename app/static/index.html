@@ -318,6 +318,12 @@
   .zone { fill:rgba(248,113,113,.32); stroke:#f87171; stroke-width:2px; vector-effect:non-scaling-stroke; }
   .zcur { fill:rgba(96,165,250,.18); stroke:#60a5fa; stroke-width:2px; vector-effect:non-scaling-stroke; stroke-dasharray:6 4; }
   .zpt { fill:#60a5fa; } .zpt.first { fill:#fff; }
+  .zone.mo { fill:rgba(251,146,60,.28); stroke:#fb923c; }   /* motion only */
+  .zone.de { fill:rgba(167,139,250,.25); stroke:#a78bfa; }  /* people/vehicles/animals only */
+  .zlbl { position:absolute; transform:translate(-50%,-50%); background:rgba(0,0,0,.7); color:#fff; font:600 12px/1 var(--mono); padding:4px 6px; border-radius:4px; pointer-events:none; }
+  .zlist { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .zrow { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:13px; }
+  .zrow .btn { height:30px; padding:0 10px; margin-left:auto; }
   .keepbox { width:min(92vw,420px); }
   .keepcams { display:flex; flex-direction:column; gap:8px; margin:6px 0 12px; }
   .cfgtext { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font:12px/1.5 var(--mono); max-height:420px; overflow:auto; white-space:pre; margin:10px 0; }
@@ -1497,8 +1503,8 @@ function busyCard(b) {
   const cam = camName(b.camera);
   const total = S.inc.total_events, mine = S.inc.events_per_camera[b.camera] || b.n;
   const picks = [...b.bursts].sort((x, y) => y.n - x.n).slice(0, 2);
-  const thr = thresholds[b.camera] || 4;
-  const suggest = Math.min(20, Math.ceil(Math.max(thr + 1, b.max_score * 0.6 + 0.5)));
+  const thr = thresholds[b.camera] || 1;
+  const suggest = +clamp(Math.max(thr * 1.5, b.max_score * 0.6), 0.1, 10).toFixed(1);
   const exp = S.expanded.has(b.id), tuning = S.tuning === b.id;
   return `<div class="busy" data-busy="${b.id}">
     <div style="display:flex;align-items:center;gap:8px"><span class="ttl">Busy period · ${esc(cam)}</span><span class="rng">${fmtHM(b.start)} – ${fmtHM(b.end)}</span></div>
@@ -1508,7 +1514,7 @@ function busyCard(b) {
       <button class="btn warn" data-act="tune">Tune ${esc(cam)} sensitivity</button>
       <button class="btn warn ghost" data-act="expand">${exp ? 'Collapse' : `Expand ${b.n} events`}</button>
     </div>
-    ${tuning ? `<div class="tuner"><span>Threshold</span><input type="range" min="1" max="20" step="0.5" value="${suggest}" aria-label="Motion threshold for ${esc(cam)}"><span class="rangeval">${suggest}</span>
+    ${tuning ? `<div class="tuner"><span>Threshold</span><input type="range" min="0.1" max="10" step="0.1" value="${suggest}" aria-label="Motion threshold for ${esc(cam)}"><span class="rangeval">${suggest}</span>
       <button class="btn warn" data-act="savetune">Save</button><span>now ${thr} · higher = fewer events</span></div>` : ''}
     ${exp ? `<div class="bursts">${[...b.bursts].reverse().map(x => `<button data-t="${x.start}"><span class="mono">${fmtTime(x.start)}</span><span>${fmtDur(x.end - x.start + 1)}</span><span style="margin-left:auto">${x.n} ev</span></button>`).join('')}</div>` : ''}
   </div>`;
@@ -1674,17 +1680,17 @@ function renderFocus() {
   const ticks = [0, 0.25, 0.5, 0.75, 1].map(k => `<span style="left:${k * 100}%">${fmtTime(w0 + k * (w1 - w0))}</span>`).join('');
   let noise = '';
   if (ci.likely_noise) {
-    const cam = ci.cameras[0], thr = thresholds[cam] || 4;
+    const cam = ci.cameras[0], thr = thresholds[cam] || 1;
     const lo = Math.min(...evs.map(e => e.score)), hi = Math.max(...evs.map(e => e.score));
-    const raise = Math.min(20, Math.ceil(hi + 0.5));
+    const raise = +clamp(hi * 1.1 + 0.05, 0.1, 10).toFixed(1);
     noise = `<div class="noisehint"><div class="ttl">Probably not an incident</div>
       <p>${evs.length === 1 ? 'The only event is weak' : `All ${evs.length} events are weak`} (strength ${lo.toFixed(1)}${evs.length > 1 ? '–' + hi.toFixed(1) : ''} against a threshold of ${thr}), only one camera saw anything, and no person or vehicle was detected.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn warn" id="fp-raise" data-v="${raise}">Raise ${esc(camName(cam))} threshold to ${raise}</button>
       <button class="btn warn ghost" id="fp-dismiss">Mark as false alarm</button></div></div>`;
   }
-  const smax = Math.max(...evs.map(e => e.score), ...ci.cameras.map(c => (thresholds[c] || 4) * 5));
+  const smax = Math.max(...evs.map(e => e.score), ...ci.cameras.map(c => (thresholds[c] || 1) * 5));
   const seq = evs.map((e, k) => {
-    const thr = thresholds[e.camera] || 4, gap = k ? `+${Math.round(e.ts - evs[k - 1].ts)} s` : 'start';
+    const thr = thresholds[e.camera] || 1, gap = k ? `+${Math.round(e.ts - evs[k - 1].ts)} s` : 'start';
     const lb = (e.label || '').split(',').filter(Boolean);
     return `<button class="seqcard" data-t="${e.ts}" data-cam="${e.camera}">
       <span class="im">${lazyImg(thumbUrl(e.id))}<span class="no">${k + 1}</span></span>
@@ -2056,10 +2062,10 @@ async function renderSettings() {
     </div>
     <div class="scard">
       <h3>Motion detection</h3>
-      <p class="hint">Marks activity on the timeline and builds incidents. ${m.enabled ? '' : '<b>Disabled</b> — enable in config.yml and restart.'} Lower sensitivity = more sensitive.</p>
-      <div class="frow"><label>Sensitivity</label><input id="s_sens" type="range" min="1" max="20" step="0.5" value="${Math.min(20, Math.max(1, m.sensitivity))}"><span class="rangeval" id="s_sens_v">${m.sensitivity}</span></div>
-      <div class="rangehint"><span>◀ more sensitive (smaller motion)</span><span>less ▶</span></div>
-      <div class="frow"><label></label><span class="sub">Typical 2–8. Raise if a camera logs too many events; lower to catch subtle motion.</span></div>
+      <p class="hint">Marks activity on the timeline and builds incidents. ${m.enabled ? '' : '<b>Disabled</b> — enable in config.yml and restart.'} Motion counts when this share of the picture clearly changes for 0.4 s.</p>
+      <div class="frow"><label>Threshold</label><input id="s_sens" type="range" min="0.1" max="10" step="0.1" value="${clamp(m.sensitivity, 0.1, 10)}"><span class="rangeval" id="s_sens_v">${m.sensitivity}%</span></div>
+      <div class="rangehint"><span>◀ more sensitive (smaller things)</span><span>less ▶</span></div>
+      <div class="frow"><label></label><span class="sub">% of the picture. Typical 0.2–2: a person far away is ~1 %, close by 5 % or more. Raise if a camera logs too many events; lower to catch small or distant motion.</span></div>
       <div class="frow"><label>Merge gap (sec)</label><input id="s_gap" type="number" min="1" value="${m.min_gap_seconds}"><span class="sub">burst of motion within this many seconds = one event</span></div>
       <div class="frow"><label>Label person/vehicle</label><input id="s_detect" type="checkbox" ${m.detect ? 'checked' : ''}><span class="sub">on-server object detection tags each event</span></div>
       <div class="frow"><button class="btn" id="s_savem">Save motion</button><span class="saved" id="s_mmsg"></span></div>
@@ -2082,7 +2088,7 @@ async function renderSettings() {
     </div>
     <div class="scard">
       <h3>Cameras</h3>
-      <p class="hint">Per-camera tuning. Rotation applies everywhere (live, snapshots, thumbnails, playback) and syncs across devices. Motion sensitivity "global" = ${m.sensitivity}; lower = more sensitive.</p>
+      <p class="hint">Per-camera tuning. Rotation applies everywhere (live, snapshots, thumbnails, playback) and syncs across devices. Motion threshold "global" = ${m.sensitivity}% of the picture; lower = more sensitive.</p>
       <div id="camsettings"></div>
       <p class="hint" style="margin-top:12px">Image settings (brightness, night mode/IR, WDR, encoding bitrate/resolution) live on the NVR and need its HTTP/ISAPI port enabled — not available while that port is closed.</p>
     </div>
@@ -2117,7 +2123,7 @@ async function renderSettings() {
     catch (e) { el.textContent = 'failed: ' + e.message; el.style.color = 'var(--head)'; }
     setTimeout(() => { el.textContent = ''; }, 6000);
   };
-  $('#s_sens').oninput = () => { $('#s_sens_v').textContent = $('#s_sens').value; };
+  $('#s_sens').oninput = () => { $('#s_sens_v').textContent = $('#s_sens').value + '%'; };
   $('#s_savem').onclick = () => save({ motion: { sensitivity: +$('#s_sens').value, min_gap_seconds: +$('#s_gap').value, detect: $('#s_detect').checked } }, $('#s_mmsg'));
   $('#s_saveau').onclick = () => save({ autosave: { enabled: $('#s_auto').checked, max_days: +$('#s_audays').value, max_gb: +$('#s_augb').value } }, $('#s_aumsg'));
   api('api/server-config').then(sc => {
@@ -2140,12 +2146,12 @@ async function renderSettings() {
   };
   $('#s_saver').onclick = () => save({ retention: { max_days: +$('#s_days').value, max_gb: +$('#s_maxgb').value, min_free_gb: +$('#s_free').value } }, $('#s_rmsg'));
   const cs = $('#camsettings');
-  const gsens = Math.min(20, Math.max(1, m.sensitivity));
+  const gsens = clamp(m.sensitivity, 0.1, 10);
   for (const c of cfg.settings.cameras) {
     const b = document.createElement('div'); b.className = 'camblock';
     const rotOpts = [0, 90, 180, 270].map(d => `<option value="${d}"${c.rotation === d ? ' selected' : ''}>${d}°</option>`).join('');
     const useGlobal = !c.motion_sensitivity;
-    const sensVal = useGlobal ? gsens : Math.min(20, Math.max(1, c.motion_sensitivity));
+    const sensVal = useGlobal ? gsens : clamp(c.motion_sensitivity, 0.1, 10);
     b.innerHTML = `
       <div class="ctitle">${esc(c.name)}</div>
       <div class="frow"><label>Name</label><input class="c_name" value="${esc(c.name)}"></div>
@@ -2155,15 +2161,15 @@ async function renderSettings() {
       <div class="frow"><label>Ignore zones</label><button class="btn c_zones">${c.zones && c.zones.length ? `Edit ${c.zones.length} zone${c.zones.length > 1 ? 's' : ''}` : 'Draw zones'}</button>
         <span class="sub">areas where motion and people/vehicles don't count (e.g. the street)</span></div>
       <div class="frow"><label>Motion sensitivity</label>
-        <input class="c_sens" type="range" min="1" max="20" step="0.5" value="${sensVal}" ${useGlobal ? 'disabled' : ''}>
-        <span class="rangeval c_sens_v">${useGlobal ? 'global' : sensVal}</span></div>
+        <input class="c_sens" type="range" min="0.1" max="10" step="0.1" value="${sensVal}" ${useGlobal ? 'disabled' : ''}>
+        <span class="rangeval c_sens_v">${useGlobal ? 'global' : sensVal + '%'}</span></div>
       <div class="rangehint"><span>◀ more sensitive</span><span>less ▶</span></div>
-      <div class="frow"><label></label><label class="chk"><input type="checkbox" class="c_global" ${useGlobal ? 'checked' : ''}> use global sensitivity (${gsens})</label></div>
+      <div class="frow"><label></label><label class="chk"><input type="checkbox" class="c_global" ${useGlobal ? 'checked' : ''}> use global threshold (${gsens}%)</label></div>
       <div class="frow"><label></label><button class="btn c_save">Save</button><span class="saved c_msg"></span></div>`;
     b.querySelector('.c_zones').onclick = () => editZones(c, () => renderSettings());
     const sens = b.querySelector('.c_sens'), sv = b.querySelector('.c_sens_v'), gl = b.querySelector('.c_global');
-    sens.oninput = () => { sv.textContent = sens.value; };
-    gl.onchange = () => { sens.disabled = gl.checked; sv.textContent = gl.checked ? 'global' : sens.value; };
+    sens.oninput = () => { sv.textContent = sens.value + '%'; };
+    gl.onchange = () => { sens.disabled = gl.checked; sv.textContent = gl.checked ? 'global' : sens.value + '%'; };
     b.querySelector('.c_save').onclick = () => save({ cameras: { [c.id]: {
       name: b.querySelector('.c_name').value, rotation: +b.querySelector('.c_rot').value,
       push_on: b.querySelector('.c_pushon').value,
@@ -2176,11 +2182,15 @@ async function renderSettings() {
 // ---------------------------------------------------------------- ignore-zone editor
 // Polygons over a fresh snapshot (as displayed, i.e. rotated), in 0-1 coordinates.
 function editZones(c, done) {
-  let zones = (c.zones || []).map(z => z.map(p => [...p])), cur = [];
+  // A zone ignores motion and/or people, vehicles & animals (both by default; a bare
+  // point list is the older form, meaning both).
+  let zones = (c.zones || []).map(z => Array.isArray(z) ? { points: z.map(p => [...p]), motion: true, detect: true }
+                                                        : { points: z.points.map(p => [...p]), motion: z.motion !== false, detect: z.detect !== false }), cur = [];
   const m = document.createElement('div'); m.id = 'modal';
   m.innerHTML = `<div class="box zonebox">
-    <p class="hint" style="margin:0 0 8px"><b>${esc(c.name)} · ignore zones.</b> Click to place points around an area to ignore (the street, beyond the gate); click the first point or <i>Close zone</i> to finish. A person or vehicle counts only if where they stand — the bottom of their box — is outside every zone. Motion inside a zone makes no events. Right-click a zone to delete it.</p>
+    <p class="hint" style="margin:0 0 8px"><b>${esc(c.name)} · ignore zones.</b> Click to place points around an area to ignore (the street, beyond the gate); click the first point or <i>Close zone</i> to finish. Then choose what each zone ignores: <b>motion</b> (movement there makes no events) and/or <b>people, vehicles &amp; animals</b> (they don't count while standing there — the bottom of their box). A street: people/vehicles only, so someone walking along the sidewalk in front of it still triggers. Something moving in the wind where people stand (a BBQ cover): motion only.</p>
     <div class="zstage"><img alt="snapshot" id="z_img"><svg id="z_svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg><div class="mspin" id="z_spin"><div class="spinner"></div></div></div>
+    <div class="zlist" id="z_list"></div>
     <div class="mbar"><button class="btn" id="z_close">Close zone</button><button class="btn" id="z_undo">Undo point</button><button class="btn" id="z_clear">Clear all</button>
       <span class="sub" id="z_info" style="flex:1"></span><button class="btn" id="z_cancel">Cancel</button><button class="btn keep" id="z_save">Save</button></div></div>`;
   document.body.appendChild(m);
@@ -2191,12 +2201,34 @@ function editZones(c, done) {
   const pts = z => z.map(p => p.join(',')).join(' ');
   const draw = () => {
     const r = img.getBoundingClientRect(), dot = 6 / Math.max(1, r.width);   // ~6 px dots whatever the size
-    svg.innerHTML = zones.map((z, i) => `<polygon class="zone" points="${pts(z)}"><title>Zone ${i + 1}</title></polygon>`).join('') +
+    const kind = z => z.motion && z.detect ? '' : z.motion ? ' mo' : ' de';
+    svg.innerHTML = zones.map((z, i) => `<polygon class="zone${kind(z)}" points="${pts(z.points)}"><title>Zone ${i + 1}</title></polygon>`).join('') +
       (cur.length ? `<polyline class="zcur" points="${pts(cur)}"></polyline>` : '') +
       cur.map(([x, y], i) => `<ellipse class="zpt${i === 0 ? ' first' : ''}" cx="${x}" cy="${y}" rx="${dot}" ry="${dot * r.width / Math.max(1, r.height)}"></ellipse>`).join('');
     m.querySelector('#z_info').textContent = `${zones.length} zone${zones.length === 1 ? '' : 's'}${cur.length ? ` · drawing (${cur.length} point${cur.length > 1 ? 's' : ''})` : ''}`;
+    m.querySelectorAll('.zlbl').forEach(e => e.remove());
+    zones.forEach((z, i) => {   // the zone's number at its centre, matching the list below
+      const cx = z.points.reduce((a, p) => a + p[0], 0) / z.points.length, cy = z.points.reduce((a, p) => a + p[1], 0) / z.points.length;
+      const l = document.createElement('span'); l.className = 'zlbl'; l.textContent = i + 1;
+      l.style.left = (cx * 100) + '%'; l.style.top = (cy * 100) + '%';
+      svg.parentElement.appendChild(l);
+    });
+    const list = m.querySelector('#z_list');
+    list.innerHTML = zones.map((z, i) => `<div class="zrow" data-i="${i}"><b>Zone ${i + 1}</b> ignores
+      <label class="chk"><input type="checkbox" data-k="motion" ${z.motion ? 'checked' : ''}> motion</label>
+      <label class="chk"><input type="checkbox" data-k="detect" ${z.detect ? 'checked' : ''}> people, vehicles &amp; animals</label>
+      <button class="btn zdel">Delete</button></div>`).join('');
+    list.querySelectorAll('.zrow').forEach(row => {
+      const z = zones[+row.dataset.i];
+      row.querySelectorAll('input').forEach(cb => cb.onchange = () => {
+        z[cb.dataset.k] = cb.checked;
+        if (!z.motion && !z.detect) { z[cb.dataset.k === 'motion' ? 'detect' : 'motion'] = true; toast('A zone has to ignore something.'); }
+        draw();
+      });
+      row.querySelector('.zdel').onclick = () => { zones.splice(+row.dataset.i, 1); draw(); };
+    });
   };
-  const closeCur = () => { if (cur.length >= 3) { zones.push(cur); cur = []; draw(); } else if (cur.length) toast('A zone needs at least 3 points.'); };
+  const closeCur = () => { if (cur.length >= 3) { zones.push({ points: cur, motion: true, detect: true }); cur = []; draw(); } else if (cur.length) toast('A zone needs at least 3 points.'); };
   svg.addEventListener('click', e => {
     const r = svg.getBoundingClientRect();
     const x = +clamp((e.clientX - r.left) / r.width, 0, 1).toFixed(4), y = +clamp((e.clientY - r.top) / r.height, 0, 1).toFixed(4);
@@ -2214,7 +2246,7 @@ function editZones(c, done) {
   const close = () => { removeEventListener('resize', draw); m.remove(); };
   m.querySelector('#z_cancel').onclick = close;
   m.querySelector('#z_save').onclick = async () => {
-    if (cur.length >= 3) zones.push(cur);
+    if (cur.length >= 3) zones.push({ points: cur, motion: true, detect: true });
     try { await post('api/config', { cameras: { [c.id]: { zones } } }); toast(`${c.name}: ${zones.length} ignore zone${zones.length === 1 ? '' : 's'} saved — applies to new motion.`); close(); done && done(); }
     catch (e) { toast('Save failed: ' + e.message); }
   };
