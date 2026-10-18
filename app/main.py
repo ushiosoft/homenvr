@@ -350,8 +350,12 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
         from .recorder import _video_tag, probe_file_codec
         path, off, length = parts[0]
         codec = await probe_file_codec(str(path))
-        inputs = ["-ss", f"{off:.3f}", "-i", str(path)]
-        args = ["-t", f"{length:.3f}", "-map", "0:v:0", "-c:v", "copy", *_video_tag(codec), "-map", "0:a:0?", "-c:a", "copy"]
+        # Seek a hair past the keyframe: a target that rounds to just before it lands
+        # on the previous keyframe, and the copy then begins there with negative
+        # timestamps that only an edit list hides — which browsers playing the stream
+        # ignore (picture seconds behind its timestamps). make_zero starts it at 0.
+        inputs = ["-ss", f"{off + 0.05:.3f}", "-i", str(path)]
+        args = ["-avoid_negative_ts", "make_zero", "-t", f"{length:.3f}", "-map", "0:v:0", "-c:v", "copy", *_video_tag(codec), "-map", "0:a:0?", "-c:a", "copy"]
         if file:
             return await _ranged_ffmpeg(f"rx-{cam_id}-{start:.3f}-{dur:g}", "", args, inputs=inputs)
         return await _stream_ffmpeg("", args, inputs=inputs)
@@ -361,7 +365,12 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     # "bytes=0-1" and gives up on a plain 200 stream), so for it the window is cut to
     # a real file first and served with Range. Built once per window (WebKit asks for
     # the same URL several times), kept a few minutes, pruned by age and total size.
-    play_cache = Path(tempfile.gettempdir()) / "homenvr-play"
+    # Per app instance: a cached window must not outlive a code change or a recording
+    # file's rename (its key is the start time). Older instances' caches are dropped.
+    import shutil as _shutil
+    for old in Path(tempfile.gettempdir()).glob("homenvr-play*"):
+        _shutil.rmtree(old, ignore_errors=True)
+    play_cache = Path(tempfile.mkdtemp(prefix="homenvr-play-"))
     play_locks: dict[str, asyncio.Lock] = {}
 
     def _prune_play_cache(keep_s: float = 600, max_bytes: float = 1.5e9) -> None:

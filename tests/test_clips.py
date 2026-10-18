@@ -173,3 +173,21 @@ def test_direct_play_window_stops_at_its_file(tmp_path):
         r = c.get("/api/cameras/cam1/remux.mp4", params={"start": BASE + 14, "dur": 30, "file": 1})
         out = tmp_path / "r.mp4"; out.write_bytes(r.content)
         assert duration(out) == pytest.approx(6.0, abs=0.3) and first_pts_and_key(out).startswith("K")
+
+
+def test_direct_play_starts_on_the_asked_keyframe(tmp_path):
+    """Regression: the copy began at the previous keyframe (negative timestamps hidden
+    only by an edit list, which browsers ignore): the picture ran seconds behind."""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    recording(tmp_path / "rec")                       # keyframes every 2 s
+    cfg = parse({"storage_dir": str(tmp_path / "rec"), "live_dir": str(tmp_path / "live"),
+                 "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    with TestClient(create_app(cfg, run_recorders=False)) as c:
+        for k in (4.0, 8.0, 12.0):
+            r = c.get("/api/cameras/cam1/remux.mp4", params={"start": BASE + k - 0.003, "dur": 4, "file": 1})
+            out = tmp_path / "k.mp4"; out.write_bytes(r.content)
+            pts = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-read_intervals", "%+#1",
+                                  "-show_entries", "packet=pts_time", "-of", "csv=p=0", str(out)], capture_output=True, text=True).stdout
+            assert float(pts.split()[0]) >= -0.06, (k, pts)
+            assert duration(out) == pytest.approx(4.0, abs=0.3)
