@@ -158,3 +158,18 @@ def test_recording_frames_across_two_files(tmp_path):
     cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
     frames = asyncio.run(recording_frames(Storage(tmp_path), cfg.cameras[0], BASE + 16, BASE + 24))
     assert len(frames) == 16
+
+
+def test_direct_play_window_stops_at_its_file(tmp_path):
+    """Direct play opens one file with an input seek (exact on its keyframe) and ends
+    at that file's end; the client continues with the next."""
+    from fastapi.testclient import TestClient
+    from app.main import create_app
+    p = recording(tmp_path / "rec")
+    q = p.with_name(f"{format_stamp(BASE + 20)}.mp4"); shutil.copy(p, q); os.utime(q, (BASE + 40, BASE + 40))
+    cfg = parse({"storage_dir": str(tmp_path / "rec"), "live_dir": str(tmp_path / "live"),
+                 "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
+    with TestClient(create_app(cfg, run_recorders=False)) as c:
+        r = c.get("/api/cameras/cam1/remux.mp4", params={"start": BASE + 14, "dur": 30, "file": 1})
+        out = tmp_path / "r.mp4"; out.write_bytes(r.content)
+        assert duration(out) == pytest.approx(6.0, abs=0.3) and first_pts_and_key(out).startswith("K")

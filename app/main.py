@@ -333,20 +333,28 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     @app.get("/api/cameras/{cam_id}/remux.mp4")
     async def remux(cam_id: str, start: float = Query(...), dur: float = Query(300), file: bool = Query(False)):
         """Direct play: the original 2K stream, stream-copied (no re-encode, ~0 CPU) into
-        fragmented MP4. Only for browsers that decode the camera codec (HEVC). Not
-        rotated — the client rotates it like live view. Audio (AAC) is copied as-is."""
+        fragmented MP4. Not rotated — the client rotates it like live view. Audio (AAC)
+        is copied as-is.
+
+        `start` is a keyframe (the client asks /keyframe first). The window stops at the
+        end of the recording file it starts in (the client goes on with the next one):
+        the file is opened with an input seek, which lands exactly on that keyframe —
+        a concat inpoint, the only way to copy across files, lands seconds early in a
+        restart's first file, which put the picture out of step with the clock and the
+        detection boxes."""
         camera_or_404(cam_id)
         dur = min(max(dur, 1), 1800)
-        script = storage.concat_list(cam_id, start, start + dur)
-        if script.count("\nfile ") == 0:
+        parts = await asyncio.to_thread(storage.window_parts, cam_id, start, start + dur)
+        if not parts:
             raise HTTPException(404, "no recordings at that time")
         from .recorder import _video_tag, probe_file_codec
-        first = re.search(r"^file '(.+)'$", script, re.M).group(1)
-        codec = await probe_file_codec(first)
-        args = ["-t", str(dur), "-map", "0:v:0", "-c:v", "copy", *_video_tag(codec), "-map", "0:a:0?", "-c:a", "copy"]
+        path, off, length = parts[0]
+        codec = await probe_file_codec(str(path))
+        inputs = ["-ss", f"{off:.3f}", "-i", str(path)]
+        args = ["-t", f"{length:.3f}", "-map", "0:v:0", "-c:v", "copy", *_video_tag(codec), "-map", "0:a:0?", "-c:a", "copy"]
         if file:
-            return await _ranged_ffmpeg(f"rx-{cam_id}-{start:.3f}-{dur:g}", script, args)
-        return await _stream_ffmpeg(script, args)
+            return await _ranged_ffmpeg(f"rx-{cam_id}-{start:.3f}-{dur:g}", "", args, inputs=inputs)
+        return await _stream_ffmpeg("", args, inputs=inputs)
 
     # ---- ranged playback files (Safari / iOS) ---------------------------------
     # WebKit plays MP4 only from responses that honour HTTP Range (it probes with
