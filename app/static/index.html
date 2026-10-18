@@ -1743,7 +1743,8 @@ $('#back10').onclick = () => seekAll(S.playT - 10);
 $('#fwd10').onclick = () => seekAll(S.playT + 10);
 $('#pinc').onclick = () => { const cur = currentIncident(); const i = prevIncident((cur ? cur.start : S.playT) - 1); if (i) playIncident(i); else toast('No earlier incident this day.'); };
 $('#ninc').onclick = () => { const cur = currentIncident(); const i = nextIncident(cur ? cur.start + 1 : S.playT); if (i) playIncident(i); else toast('No newer incident — press Go live for now.'); };
-$('#speed').onchange = e => { S.speed = +e.target.value; for (const c of cameras) tiles[c.id].video.playbackRate = S.speed; };
+// (A tile still skipping its lead-in keeps its fast rate; finishTarget applies S.speed.)
+$('#speed').onchange = e => { S.speed = +e.target.value; for (const c of cameras) if (!tiles[c.id].ff) tiles[c.id].video.playbackRate = S.speed; };
 $('#quality').value = localStorage.getItem('quality') || 'auto';
 // Off by default: a picked clip should simply keep playing, like any video.
 try { $('#skipgaps').checked = localStorage.getItem('skipGaps') === '1'; } catch {}
