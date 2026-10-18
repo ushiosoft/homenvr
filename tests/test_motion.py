@@ -90,3 +90,18 @@ def test_single_frame_spike_is_not_motion(tmp_path):
     assert md._sample(4.5, now=t) is False                    # motion: first frame...
     assert md._sample(5.0, now=t + 0.2) is True               # ...second in a row -> event
     assert md._sample(6.0, now=t + 0.4) is False              # same burst: merged (min gap)
+
+
+def test_analyzer_output_lines_make_events(tmp_path, caplog):
+    """Regression: the line handler referenced a removed variable, so every event
+    crashed the analyzer (it restarted, blind for a few seconds, ~125 times a night)."""
+    import logging
+    caplog.set_level(logging.DEBUG)
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}],
+                 "motion": {"enabled": True, "sensitivity": 1.0, "min_gap_seconds": 8}})
+    md = MotionDetector(cfg.cameras[0], cfg, EventStore(tmp_path / "e.db"))
+    line = lambda pct: f"[Parsed_metadata_6 @ 0x1] lavfi.signalstats.YAVG={pct * 255 / 100:.4f}\n".encode()
+    assert md._line(b"frame=  10 fps=5.0\n", now=1000) is False
+    assert md._line(line(2.0), now=1000) is False          # first frame over 1 %
+    assert md._line(line(3.0), now=1000.2) is True         # second in a row -> event
+    assert md.events == 1 and "3.00 % of the picture" in caplog.text

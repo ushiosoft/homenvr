@@ -96,6 +96,17 @@ class MotionDetector:
         self.events = 0
         self._loop = None
 
+    def _line(self, line: bytes, now: float | None = None) -> bool:
+        """One line of the analyzer's output; True if it made an event."""
+        m = _YAVG_RE.search(line)
+        if not m:
+            return False
+        s = score(float(m.group(1)))
+        if self._sample(s, now):
+            log.debug("[%s/motion] event: %.2f %% of the picture changed", self.cam.id, s)
+            return True
+        return False
+
     def _sample(self, score: float, now: float | None = None) -> bool:
         """Feed one frame's score; records an event (see _record) once CONFIRM_FRAMES
         frames in a row reach the threshold. Returns True if an event was stored."""
@@ -149,11 +160,7 @@ class MotionDetector:
                 )
                 assert self._proc.stderr
                 async for line in self._proc.stderr:
-                    m = _YAVG_RE.search(line)
-                    if not m:
-                        continue
-                    if self._sample(score(float(m.group(1)))):
-                        log.debug("[%s/motion] event YAVG=%.2f", self.cam.id, yavg)
+                    self._line(line)
                 await self._proc.wait()
             except asyncio.CancelledError:
                 raise
