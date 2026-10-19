@@ -103,6 +103,15 @@ def create_app(cfg: config_mod.Config | None = None, run_recorders: bool = True)
     async def healthz():
         return {"ok": True}
 
+    @app.get("/api/site")
+    async def site():
+        """The site's timezone (the server's TZ, e.g. America/Edmonton). The page shows
+        every time in it — like the cameras' clock overlays and the push messages —
+        whatever the viewing device's own timezone (a phone abroad, or a PC whose
+        Windows zone the browser can't map and shows an hour off)."""
+        tz = os.environ.get("TZ", "")
+        return {"tz": tz if re.fullmatch(r"[A-Za-z_]+(/[A-Za-z0-9_+-]+)*", tz or "") else None}
+
     @app.get("/api/cameras")
     async def cameras():
         out = []

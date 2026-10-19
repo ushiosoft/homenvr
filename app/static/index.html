@@ -534,9 +534,28 @@ const post = (p, body) => fetch(p, { method: 'POST', headers: { 'Content-Type': 
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtBytes = b => b > 1e12 ? (b / 1e12).toFixed(2) + ' TB' : b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.max(0.1, b / 1e6).toFixed(b < 1e7 ? 1 : 0) + ' MB';
 const pad = n => String(n).padStart(2, '0');
-const fmtTime = t => { const d = new Date(t * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
-const fmtHM = t => { const d = new Date(t * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-const fmtDay = t => new Date(t * 1000).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+// ---- site time: every clock and day is shown in the site's timezone (the server's,
+// /api/site), like the cameras' overlays — not the viewing device's (a phone abroad,
+// or a PC whose Windows zone the browser can't map, which showed an hour off).
+let SITE_TZ;          // IANA name; undefined = the device's own zone
+let _siteFmt = null;
+function siteParts(t) {
+  if (!_siteFmt) _siteFmt = new Intl.DateTimeFormat('en-US', { timeZone: SITE_TZ, hourCycle: 'h23', year: 'numeric',
+    month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
+  const p = {};
+  for (const x of _siteFmt.formatToParts(new Date(t * 1000))) p[x.type] = +x.value;
+  return { y: p.year, mo: p.month, d: p.day, h: p.hour % 24, mi: p.minute, s: p.second };
+}
+// The instant when the site's wall clock reads y-mo-d h:mi:s.
+function siteTime(y, mo, d, h = 0, mi = 0, s = 0) {
+  const wall = Date.UTC(y, mo - 1, d, h, mi, s) / 1000;
+  let t = wall;
+  for (let i = 0; i < 2; i++) { const p = siteParts(t); t -= Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s) / 1000 - wall; }
+  return t;
+}
+const fmtTime = t => { const p = siteParts(t); return `${pad(p.h)}:${pad(p.mi)}:${pad(p.s)}`; };
+const fmtHM = t => { const p = siteParts(t); return `${pad(p.h)}:${pad(p.mi)}`; };
+const fmtDay = t => new Date(t * 1000).toLocaleDateString(undefined, { timeZone: SITE_TZ, weekday: 'short', month: 'short', day: 'numeric' });
 const fmtDur = s => { s = Math.max(1, Math.round(s)); if (s < 60) return s + ' s'; const m = Math.floor(s / 60);
   if (m < 60) return `${m} m ${s % 60} s`; return `${Math.floor(m / 60)} h ${m % 60} m`; };
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -588,9 +607,9 @@ const tiles = {};      // camId -> { el, video, hls, state, start, direct, reloa
 const camById = id => cameras.find(c => c.id === id);
 const camName = id => (camById(id) || {}).name || id;
 const portrait = id => (camRot[id] || 0) % 180 !== 0;
-function todayStart() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime() / 1000; }
-function dayOf(t) { const d = new Date(t * 1000); d.setHours(0, 0, 0, 0); return d.getTime() / 1000; }
-function dayEnd(ds) { const d = new Date(ds * 1000); d.setDate(d.getDate() + 1); return d.getTime() / 1000; }
+function dayOf(t) { const p = siteParts(t); return siteTime(p.y, p.mo, p.d); }
+function todayStart() { return dayOf(nowS()); }
+function dayEnd(ds) { const p = siteParts(ds + 30 * 3600); return siteTime(p.y, p.mo, p.d); }   // days are 23-25 h
 const isToday = () => S.dayStart === todayStart();
 
 // ---------------------------------------------------------------- live video (HLS)
@@ -1361,7 +1380,7 @@ function renderClock() {
   $('#revtime').textContent = fmtTime(t);
   $('#tptime').textContent = fmtTime(t);
   $('#revday').textContent = '· ' + fmtDay(t);
-  if (isWall) { $('#wtime').textContent = fmtHM(nowS()); $('#wdate').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }); }
+  if (isWall) { $('#wtime').textContent = fmtHM(nowS()); $('#wdate').textContent = new Date().toLocaleDateString(undefined, { timeZone: SITE_TZ, weekday: 'long', month: 'short', day: 'numeric' }); }
   renderPlayhead();
   renderFocusPlayhead();
   renderScrub();
@@ -1823,8 +1842,7 @@ $('#z-half').onclick = () => {
   if (S.mode === 'live') reviewAt(nowS() - 30 - LIVE_EDGE); else { ensureHalfWindow(true); renderTimeline(); }
 };
 function shiftDay(dir) {
-  const d = new Date(S.dayStart * 1000); d.setDate(d.getDate() + dir);
-  const ds = d.getTime() / 1000;
+  const ds = dir > 0 ? dayEnd(S.dayStart) : dayOf(S.dayStart - 3600);
   if (ds > todayStart()) return;
   if (ds === todayStart()) { goLive(); return; }
   S.dayStart = ds; S.selInc = null;
@@ -1885,7 +1903,7 @@ async function openSnapshot(camId, name) {
     if (!r.ok) throw new Error(r.status);
     const blobUrl = URL.createObjectURL(await r.blob());
     m.querySelector('.box').innerHTML = `<img src="${blobUrl}" alt="snapshot">
-      <div class="mbar"><b style="flex:1">${esc(name)} · ${new Date().toLocaleTimeString()}</b>
+      <div class="mbar"><b style="flex:1">${esc(name)} · ${fmtTime(nowS())}</b>
         <a class="btn" href="${blobUrl}" download="${camId}-snapshot.jpg">Download</a>
         <button class="btn" id="m_push">Push to alert</button><button class="btn" id="m_close">Close</button>
         <span class="saved" id="m_msg"></span></div>`;
@@ -1926,7 +1944,7 @@ async function renderSaved() {
 // "<cam>-YYYYMMDD-HHMMSS-..." -> the clip's start (local time), or null.
 function clipStart(name) {
   const m = name.match(/^[^-]+-(\d{4})(\d\d)(\d\d)-(\d\d)(\d\d)(\d\d)/);
-  return m ? new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000 : null;
+  return m ? siteTime(+m[1], +m[2], +m[3], +m[4], +m[5], +m[6]) : null;   // named in the site's time
 }
 // Clips saved together (one per camera: same start, same name) form one card.
 const clipKey = name => name.replace(/^[^-]+-/, '').replace(/\.mp4$/, '');
@@ -2286,6 +2304,7 @@ window.addEventListener('hashchange', () => tab(tabFromHash()));
 (async () => {
   if (isWall) document.body.classList.add('wall');
   try {
+    try { SITE_TZ = (await api('api/site')).tz || undefined; _siteFmt = null; } catch {}
     await loadCameras();
     S.dayStart = todayStart();
     buildGrid();

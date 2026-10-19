@@ -165,3 +165,12 @@ def test_box_frames_api(tmp_path):
         assert r == [{"t": 994.5, "b": [["animal", 0.1, 0.2, 0.3, 0.4]]}, {"t": 995.0, "b": [["motion", 0, 0, 0.1, 0.1]]}]
         assert c.get("/api/cameras/cam1/boxes", params={"start": 995.2, "end": 1010}).json() == []
         assert c.get("/api/incidents", params={"start": 0, "end": 5000, "filter": "animal"}).status_code == 200
+
+
+def test_site_timezone(tmp_path, monkeypatch):
+    monkeypatch.setenv("TZ", "America/Edmonton")
+    with client(tmp_path) as c:
+        assert c.get("/api/site").json() == {"tz": "America/Edmonton"}
+    monkeypatch.setenv("TZ", "x; rm -rf")
+    with client(tmp_path) as c:
+        assert c.get("/api/site").json() == {"tz": None}
