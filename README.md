@@ -55,7 +55,8 @@ and stores recordings on hardware you control.
   With a *Public address* set, each push links to the event (`/?play=<t>&cam=<id>`).
 - **Ignore zones** — per camera, drawn over a snapshot; each ignores motion and/or
   people, vehicles & animals standing in it (a street: detections only, so a walker
-  on the sidewalk still triggers; a BBQ cover in the wind: motion only).
+  on the sidewalk still triggers; a BBQ cover in the wind: motion only), or keeps them
+  labelled but doesn't push for them (a sidewalk's passers-by).
 - **Exact seeking** — review starts at the exact second you pick; saved clips
   play from a seekable copy. Safari/iPhone/iPad get Range-capable files.
 - **Clip export + permanent "saved" clips** — never auto-deleted, with thumbnails
