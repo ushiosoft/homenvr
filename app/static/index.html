@@ -320,6 +320,7 @@
   .zpt { fill:#60a5fa; } .zpt.first { fill:#fff; }
   .zone.mo { fill:rgba(251,146,60,.28); stroke:#fb923c; }   /* motion only */
   .zone.de { fill:rgba(167,139,250,.25); stroke:#a78bfa; }  /* people/vehicles/animals only */
+  .zone.np { fill:rgba(45,212,191,.2); stroke:#2dd4bf; stroke-dasharray:6 4; }  /* no pushes only */
   .zlbl { position:absolute; transform:translate(-50%,-50%); background:rgba(0,0,0,.7); color:#fff; font:600 12px/1 var(--mono); padding:4px 6px; border-radius:4px; pointer-events:none; }
   .zlist { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
   .zrow { display:flex; align-items:center; gap:12px; flex-wrap:wrap; font-size:13px; }
@@ -2202,11 +2203,11 @@ async function renderSettings() {
 function editZones(c, done) {
   // A zone ignores motion and/or people, vehicles & animals (both by default; a bare
   // point list is the older form, meaning both).
-  let zones = (c.zones || []).map(z => Array.isArray(z) ? { points: z.map(p => [...p]), motion: true, detect: true }
-                                                        : { points: z.points.map(p => [...p]), motion: z.motion !== false, detect: z.detect !== false }), cur = [];
+  let zones = (c.zones || []).map(z => Array.isArray(z) ? { points: z.map(p => [...p]), motion: true, detect: true, nopush: false }
+                                                        : { points: z.points.map(p => [...p]), motion: z.motion !== false, detect: z.detect !== false, nopush: !!z.nopush }), cur = [];
   const m = document.createElement('div'); m.id = 'modal';
   m.innerHTML = `<div class="box zonebox">
-    <p class="hint" style="margin:0 0 8px"><b>${esc(c.name)} · ignore zones.</b> Click to place points around an area to ignore (the street, beyond the gate); click the first point or <i>Close zone</i> to finish. Then choose what each zone ignores: <b>motion</b> (movement there makes no events) and/or <b>people, vehicles &amp; animals</b> (they don't count while standing there — the bottom of their box). A street: people/vehicles only, so someone walking along the sidewalk in front of it still triggers. Something moving in the wind where people stand (a BBQ cover): motion only.</p>
+    <p class="hint" style="margin:0 0 8px"><b>${esc(c.name)} · ignore zones.</b> Click to place points around an area to ignore (the street, beyond the gate); click the first point or <i>Close zone</i> to finish. Then choose what each zone ignores: <b>motion</b> (movement there makes no events) and/or <b>people, vehicles &amp; animals</b> (they don't count while standing there — the bottom of their box). A street: people/vehicles only, so someone walking along the sidewalk in front of it still triggers. Something moving in the wind where people stand (a BBQ cover): motion only. A sidewalk: <b>no pushes</b> — passers-by stay labelled and findable, but only people outside such zones push.</p>
     <div class="zstage"><img alt="snapshot" id="z_img"><svg id="z_svg" viewBox="0 0 1 1" preserveAspectRatio="none"></svg><div class="mspin" id="z_spin"><div class="spinner"></div></div></div>
     <div class="zlist" id="z_list"></div>
     <div class="mbar"><button class="btn" id="z_close">Close zone</button><button class="btn" id="z_undo">Undo point</button><button class="btn" id="z_clear">Clear all</button>
@@ -2219,7 +2220,7 @@ function editZones(c, done) {
   const pts = z => z.map(p => p.join(',')).join(' ');
   const draw = () => {
     const r = img.getBoundingClientRect(), dot = 6 / Math.max(1, r.width);   // ~6 px dots whatever the size
-    const kind = z => z.motion && z.detect ? '' : z.motion ? ' mo' : ' de';
+    const kind = z => z.motion && z.detect ? '' : z.motion ? ' mo' : z.detect ? ' de' : ' np';
     svg.innerHTML = zones.map((z, i) => `<polygon class="zone${kind(z)}" points="${pts(z.points)}"><title>Zone ${i + 1}</title></polygon>`).join('') +
       (cur.length ? `<polyline class="zcur" points="${pts(cur)}"></polyline>` : '') +
       cur.map(([x, y], i) => `<ellipse class="zpt${i === 0 ? ' first' : ''}" cx="${x}" cy="${y}" rx="${dot}" ry="${dot * r.width / Math.max(1, r.height)}"></ellipse>`).join('');
@@ -2235,18 +2236,19 @@ function editZones(c, done) {
     list.innerHTML = zones.map((z, i) => `<div class="zrow" data-i="${i}"><b>Zone ${i + 1}</b> ignores
       <label class="chk"><input type="checkbox" data-k="motion" ${z.motion ? 'checked' : ''}> motion</label>
       <label class="chk"><input type="checkbox" data-k="detect" ${z.detect ? 'checked' : ''}> people, vehicles &amp; animals</label>
+      <label class="chk" title="People here stay labelled but don't push (only shown when they aren't ignored)"><input type="checkbox" data-k="nopush" ${z.nopush ? 'checked' : ''} ${z.detect ? 'disabled' : ''}> no pushes</label>
       <button class="btn zdel">Delete</button></div>`).join('');
     list.querySelectorAll('.zrow').forEach(row => {
       const z = zones[+row.dataset.i];
       row.querySelectorAll('input').forEach(cb => cb.onchange = () => {
         z[cb.dataset.k] = cb.checked;
-        if (!z.motion && !z.detect) { z[cb.dataset.k === 'motion' ? 'detect' : 'motion'] = true; toast('A zone has to ignore something.'); }
+        if (!z.motion && !z.detect && !z.nopush) { z[cb.dataset.k] = true; toast('A zone has to ignore something.'); }
         draw();
       });
       row.querySelector('.zdel').onclick = () => { zones.splice(+row.dataset.i, 1); draw(); };
     });
   };
-  const closeCur = () => { if (cur.length >= 3) { zones.push({ points: cur, motion: true, detect: true }); cur = []; draw(); } else if (cur.length) toast('A zone needs at least 3 points.'); };
+  const closeCur = () => { if (cur.length >= 3) { zones.push({ points: cur, motion: true, detect: true, nopush: false }); cur = []; draw(); } else if (cur.length) toast('A zone needs at least 3 points.'); };
   svg.addEventListener('click', e => {
     const r = svg.getBoundingClientRect();
     const x = +clamp((e.clientX - r.left) / r.width, 0, 1).toFixed(4), y = +clamp((e.clientY - r.top) / r.height, 0, 1).toFixed(4);
@@ -2264,7 +2266,7 @@ function editZones(c, done) {
   const close = () => { removeEventListener('resize', draw); m.remove(); };
   m.querySelector('#z_cancel').onclick = close;
   m.querySelector('#z_save').onclick = async () => {
-    if (cur.length >= 3) zones.push({ points: cur, motion: true, detect: true });
+    if (cur.length >= 3) zones.push({ points: cur, motion: true, detect: true, nopush: false });
     try { await post('api/config', { cameras: { [c.id]: { zones } } }); toast(`${c.name}: ${zones.length} ignore zone${zones.length === 1 ? '' : 's'} saved — applies to new motion.`); close(); done && done(); }
     catch (e) { toast('Save failed: ' + e.message); }
   };

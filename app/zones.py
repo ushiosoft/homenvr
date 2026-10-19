@@ -9,8 +9,11 @@ its rotation), stored as normalized [x, y] points (0-1) in camera.zones.
 - Motion: the zones are blacked out of the frame difference before it's scored
   (app/motion.py), so movement there makes no events.
 
-Each zone says which of the two it ignores: {"points": [[x, y], ...], "motion": bool,
-"detect": bool} (a bare list of points is the older form: both). Ignoring only
+Each zone says what it ignores: {"points": [[x, y], ...], "motion": bool, "detect": bool,
+"nopush": bool} (a bare list of points is the older form: motion + detect). "nopush"
+keeps people/vehicles/animals standing in the zone labelled (boxes, filters) but they
+don't make the event push — passers-by on the sidewalk, say; anyone outside such zones
+still does (app.recorder.push_labels). Ignoring only
 detections suits a street (no vehicle labels or pushes, but someone walking along the
 sidewalk, partly in front of it, still triggers); ignoring only motion suits something
 that moves where people still stand (a BBQ cover in the wind).
@@ -33,6 +36,14 @@ def ignores_motion(z) -> bool:
 
 def ignores_detect(z) -> bool:
     return z.get("detect", True) if isinstance(z, dict) else True
+
+
+def no_push(z) -> bool:
+    return bool(z.get("nopush", False)) if isinstance(z, dict) else False
+
+
+def nopush_polys(zones) -> list:
+    return [points(z) for z in zones or [] if no_push(z)]
 
 
 def motion_polys(zones) -> list:
@@ -58,10 +69,10 @@ def validate(value) -> list[dict]:
             if not (0 <= x <= 1 and 0 <= y <= 1):
                 raise ValueError("zone points must be within 0-1")
             pts.append([round(x, 4), round(y, 4)])
-        m, d = ignores_motion(z), ignores_detect(z)
-        if not (m or d):
-            raise ValueError("a zone must ignore motion, detections, or both")
-        out.append({"points": pts, "motion": bool(m), "detect": bool(d)})
+        m, d, n = ignores_motion(z), ignores_detect(z), no_push(z)
+        if not (m or d or n):
+            raise ValueError("a zone must ignore motion, detections or pushes")
+        out.append({"points": pts, "motion": bool(m), "detect": bool(d), "nopush": bool(n)})
     return out
 
 

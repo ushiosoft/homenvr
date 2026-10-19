@@ -14,7 +14,7 @@ TOP = [[0, 0], [1, 0], [1, 0.3], [0, 0.3]]   # top 30 % of the displayed picture
 def test_validate_and_settings_roundtrip(tmp_path):
     cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}]})
     update(cfg, tmp_path / "s.json", {"cameras": {"cam1": {"zones": [[[0, 0], [1, 0], [0.5, 0.123456]]]}}})
-    assert cfg.cameras[0].zones == [{"points": [[0.0, 0.0], [1.0, 0.0], [0.5, 0.1235]], "motion": True, "detect": True}]
+    assert cfg.cameras[0].zones == [{"points": [[0.0, 0.0], [1.0, 0.0], [0.5, 0.1235]], "motion": True, "detect": True, "nopush": False}]
     for bad in ([[[0, 0], [1, 1]]], [[[0, 0], [2, 0], [1, 1]]], "x", [TOP] * 9):
         with pytest.raises(ValueError):
             zones.validate(bad)
@@ -75,3 +75,19 @@ def test_zone_kinds(tmp_path):
     assert m[10, 160] == 255 and m[170, 160] == 0                             # street open, BBQ masked
     # The older form (a bare polygon) still means both.
     assert zones.ignored((100, 10, 300, 100), 640, 360, [TOP]) and zones.motion_polys([TOP]) == [TOP]
+
+
+def test_no_push_zone_keeps_labels_but_not_pushes():
+    """Passers-by on the sidewalk (feet inside a "no push" zone) stay labelled but
+    don't push; someone on the driveway in the same burst still does."""
+    from app.recorder import push_labels
+    sidewalk = {"points": [[0, 0.2], [1, 0.2], [1, 0.34], [0, 0.34]], "motion": False, "detect": False, "nopush": True}
+    assert zones.validate([sidewalk])[0]["nopush"] is True
+    walker = ["person", 0.40, 0.10, 0.45, 0.30]          # feet at 0.30: on the sidewalk
+    visitor = ["person", 0.50, 0.40, 0.58, 0.80]         # feet at 0.80: on the driveway
+    passer = {"f": [[walker], [walker], [walker]]}
+    assert push_labels(["person"], passer, [sidewalk]) == []
+    both = {"f": [[walker, visitor], [walker, visitor], [walker]]}
+    assert push_labels(["person"], both, [sidewalk]) == ["person"]
+    assert push_labels(["person"], passer, []) == ["person"]          # no such zone: unchanged
+    assert push_labels(["person"], None, [sidewalk]) == ["person"]    # nothing to tell by

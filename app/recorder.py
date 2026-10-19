@@ -274,6 +274,24 @@ def push_categories(policy: str) -> set[str]:
     return set(policy.replace("person_vehicle", "person,vehicle").split(",")) - {""}
 
 
+def push_labels(labels: list[str], boxes: dict | None, zones) -> list[str]:
+    """The labels that may push: a category whose detections stood (bottom centre of the
+    box) outside every "no push" zone in at least MIN_FRAMES burst frames. Without such
+    zones, or without boxes to tell, all of them."""
+    from .zones import inside, nopush_polys
+    polys = nopush_polys(zones)
+    if not polys or not boxes or not labels:
+        return labels
+    from .detect import MIN_FRAMES
+    frames: dict[str, int] = {}
+    for fb in boxes.get("f") or []:
+        cats = {k for k, x1, _y1, x2, y2 in fb
+                if k in labels and not any(inside((x1 + x2) / 2, y2, z) for z in polys)}
+        for k in cats:
+            frames[k] = frames.get(k, 0) + 1
+    return [k for k in labels if frames.get(k, 0) >= MIN_FRAMES]
+
+
 def should_push(policy: str, labels: list[str]) -> bool:
     """Whether an event with these labels (moving, per analyze_burst) is pushed."""
     if policy == "motion":
@@ -692,9 +710,10 @@ class Supervisor:
             if want_detect:
                 if self.events is not None:
                     await asyncio.to_thread(self.events.set_label, eid, ",".join(labels))
-            if push_ready and should_push(policy, labels) and self.autosaver is not None:
+            pushable = push_labels(labels, boxes, cam.zones)
+            if push_ready and should_push(policy, pushable) and self.autosaver is not None:
                 self.autosaver.pushed(cam_id, ts)  # keep a clip of it (also inside the push cooldown)
-            if push_now and not should_push(policy, labels):
+            if push_now and not should_push(policy, pushable):
                 log.debug("[%s] not pushed (push_on=%s, labels=%s)", cam_id, policy, labels or "none")
             elif push_now:
                 await self._send_push(cam, ts, labels, img, eid)
@@ -765,7 +784,7 @@ class Supervisor:
                 from .detect import draw_boxes
                 img = await asyncio.to_thread(draw_boxes, frames[i], boxes[i])
                 await asyncio.to_thread(save_thumb, self.storage.thumb_path(cam.id, eid), img)
-            await self._late_push(cam, eid, ts, labels, img)
+            await self._late_push(cam, eid, ts, labels, img, {"f": boxes})
         except Exception as e:  # noqa: BLE001 - the live result stays
             log.debug("[%s] recording re-analysis of event %s failed: %s", cam.id, eid, e)
 
@@ -783,7 +802,8 @@ class Supervisor:
                                 review_link(a.public_url, cam.id, ts))
         log.info("[%s] motion push sent (%s%s)", cam.id, what, note)
 
-    async def _late_push(self, cam, eid: int, ts: float, labels: list[str], img: bytes) -> None:
+    async def _late_push(self, cam, eid: int, ts: float, labels: list[str], img: bytes,
+                         boxes: dict | None = None) -> None:
         """The recording pass found what the push rule asks for (a person, say) and the
         live burst had missed it — a driver behind a windscreen at night, seen in the 2K
         recording but not in the live sub-stream. Push now, unless this event was pushed
@@ -791,7 +811,7 @@ class Supervisor:
         a = self.cfg.alerts
         if not (a.motion_push and a.notifier != "none") or eid in self._pushed_eids:
             return
-        if not should_push(cam.push_on or a.push_on, labels):
+        if not should_push(cam.push_on or a.push_on, push_labels(labels, boxes, cam.zones)):
             return
         if a.motion_push_cooldown and ts - self._motion_push_at.get(cam.id, 0.0) < a.motion_push_cooldown:
             return
