@@ -40,6 +40,11 @@ ANALYZE_WIDTH = 320
 # brightness changes, ~200/hour in daylight) and decode glitches make exactly that,
 # while anything that really moves changes several frames in a row.
 CONFIRM_FRAMES = 2
+# No frame score for this long = the analyzer is blind (e.g. the stream's timestamps
+# jumped back and the fps filter drops every frame until they catch up): restart it.
+STALL_SECONDS = 30
+# The output reader's line limit (asyncio's default is 64 KB).
+LINE_LIMIT = 1 << 20
 
 
 def sensitivity_for(cam: Camera, cfg: Config) -> float:
@@ -60,7 +65,7 @@ def motion_cmd(cam: Camera, cfg: Config, url: str | None = None, mask: Path | No
     scored by the share of changed pixels (see score()). With a mask (the camera's
     ignore zones, app/zones.py) the difference is multiplied by it first, so changes
     inside a zone score nothing."""
-    head = [FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "info",
+    head = [FFMPEG, "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info",
             *input_args(url or cam.live_url, cfg.rtsp_transport)]
     scale = f"fps={ANALYZE_FPS},scale={ANALYZE_WIDTH}:{height},gblur=sigma=1"
     changed = f"lutyuv=y=if(gt(val\\,{CHANGE_LEVEL})\\,255\\,0),signalstats,metadata=print"
@@ -106,6 +111,24 @@ class MotionDetector:
             log.debug("[%s/motion] event: %.2f %% of the picture changed", self.cam.id, s)
             return True
         return False
+
+    async def _read(self, stream: asyncio.StreamReader) -> bool:
+        """Feed the analyzer's output to _line until it ends (True) or no frame score
+        has come for STALL_SECONDS (False)."""
+        last_score = time.monotonic()
+        while True:
+            left = STALL_SECONDS - (time.monotonic() - last_score)
+            if left <= 0:
+                return False
+            try:
+                line = await asyncio.wait_for(stream.readline(), left)
+            except asyncio.TimeoutError:
+                return False
+            if not line:
+                return True
+            if _YAVG_RE.search(line):
+                last_score = time.monotonic()
+            self._line(line)
 
     def _sample(self, score: float, now: float | None = None) -> bool:
         """Feed one frame's score; records an event (see _record) once CONFIRM_FRAMES
@@ -156,18 +179,23 @@ class MotionDetector:
                 self._proc = await asyncio.create_subprocess_exec(
                     *cmd, stdin=asyncio.subprocess.DEVNULL,
                     stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
-                    env={**os.environ, "TZ": "UTC"},
+                    env={**os.environ, "TZ": "UTC"}, limit=LINE_LIMIT,
                 )
                 assert self._proc.stderr
-                async for line in self._proc.stderr:
-                    self._line(line)
-                await self._proc.wait()
+                if not await self._read(self._proc.stderr):
+                    log.warning("[%s/motion] no frames analysed for %d s; restarting",
+                                self.cam.id, STALL_SECONDS)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 log.error("[%s/motion] %s", self.cam.id, redact(str(e)))
             finally:
-                self._proc = None
+                # Never leave it running: blocked on a stderr pipe nobody reads, it would
+                # keep holding a go2rtc stream next to its replacement.
+                p, self._proc = self._proc, None
+                if p and p.returncode is None:
+                    p.kill()
+                    await p.wait()
                 if fallback_timer:
                     fallback_timer.cancel()
             if self._stopping:

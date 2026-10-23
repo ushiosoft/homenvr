@@ -133,3 +133,88 @@ def test_recording_pass_pushes_what_the_live_burst_missed(tmp_path):
         await sup._late_push(cam, 4, 200.0, ["person"], b"")             # later, separate: pushed
     asyncio.run(run())
     assert sent == [(2, " (confirmed on the recording)"), (4, " (confirmed on the recording)")]
+
+
+def _motion_cfg(tmp_path):
+    return parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}],
+                  "motion": {"enabled": True}})
+
+
+def test_motion_cmd_prints_no_progress_stats(tmp_path):
+    """ffmpeg's progress line ends in \\r, not \\n: while no frames come out (a stream's
+    timestamps jumped back) it grew into one >64 KB "line" and the reader failed."""
+    assert "-nostats" in motion_cmd(_motion_cfg(tmp_path).cameras[0], _motion_cfg(tmp_path))
+
+
+def test_analyzer_output_without_scores_counts_as_stalled(tmp_path, monkeypatch):
+    """Warnings keep coming but no frame scores (or nothing at all): the analyzer is
+    blind, so _read gives up and the run loop restarts it."""
+    import asyncio
+    import app.motion as motion
+    monkeypatch.setattr(motion, "STALL_SECONDS", 0.3)
+    md = MotionDetector(_motion_cfg(tmp_path).cameras[0], _motion_cfg(tmp_path), EventStore(tmp_path / "e.db"))
+
+    async def chatty():
+        r = asyncio.StreamReader()
+        async def feed():
+            while True:
+                r.feed_data(b"[hls @ 0x1] Non-monotonous DTS in output stream 0:0\n")
+                await asyncio.sleep(0.05)
+        t = asyncio.ensure_future(feed())
+        try:
+            return await asyncio.wait_for(md._read(r), 5)
+        finally:
+            t.cancel()
+
+    async def silent():
+        return await asyncio.wait_for(md._read(asyncio.StreamReader()), 5)
+
+    async def ended():
+        r = asyncio.StreamReader()
+        r.feed_data(b"lavfi.signalstats.YAVG=0.0\n")
+        r.feed_eof()
+        return await md._read(r)
+
+    assert asyncio.run(chatty()) is False
+    assert asyncio.run(silent()) is False
+    assert asyncio.run(ended()) is True
+
+
+def test_failed_analyzer_process_is_killed(tmp_path, monkeypatch):
+    """Regression (2026-10-22): a read error left the old ffmpeg running, blocked on its
+    full stderr pipe and still holding a go2rtc stream, next to its replacement."""
+    import asyncio
+    import sys
+    import app.motion as motion
+    procs = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def fake_pick(*a, **k):
+        return "rtsp://x", {}, False
+
+    async def spawn(*a, **k):
+        p = await real_exec(*a, **k)
+        procs.append(p)
+        return p
+
+    script = "import sys, time; sys.stderr.write('x' * (4 << 20)); sys.stderr.flush(); time.sleep(60)"
+    monkeypatch.setattr(motion, "pick_source", fake_pick)
+    monkeypatch.setattr(motion, "motion_cmd", lambda *a, **k: [sys.executable, "-c", script])
+    monkeypatch.setattr(motion.asyncio, "create_subprocess_exec", spawn)
+    md = MotionDetector(_motion_cfg(tmp_path).cameras[0], _motion_cfg(tmp_path), EventStore(tmp_path / "e.db"))
+
+    async def go():
+        task = asyncio.ensure_future(md.run())
+        for _ in range(100):
+            await asyncio.sleep(0.1)
+            if procs and md._proc is None:
+                break
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return procs[0]
+
+    p = asyncio.run(go())
+    assert p.returncode is not None
