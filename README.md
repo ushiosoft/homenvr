@@ -192,12 +192,12 @@ does its own) and NTP on.
 After changing a camera, the recorder and go2rtc reconnect by themselves (go2rtc's
 codec is re-checked every 10 minutes; restart homenvr to apply at once).
 
-## Deployment notes (this install)
+## Deployment notes
 
-- Production runs on the server (an older 8-core Xeon, SSE4.1
-  only, 11 GB RAM): code + `.env` + `config.yml` in `~/srv/homenvr` (a git clone),
-  data in `/srv/cctv` (`RECORDINGS_DIR`: recordings, `grace/`, `saved/`,
-  `thumbs/`, `events.db`, `settings.json`).
+- A typical server install: code + `.env` + `config.yml` in `~/srv/homenvr` (a git
+  clone), data in `RECORDINGS_DIR` (recordings, `grace/`, `saved/`, `thumbs/`,
+  `events.db`, `settings.json`). An older 8-core Xeon without AVX handles three
+  cameras.
 - Deploy:
   `cd ~/srv/homenvr && git pull && docker compose up -d --build` (the server's `.env` has
   `COMPOSE_PROFILES=tailscale`, which brings up the Tailscale sidecar too).

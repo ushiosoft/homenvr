@@ -7,3 +7,6 @@ __pycache__/
 app/static/hls.min.js
 samples/
 settings.json
+
+# Session handoff notes (local only)
+HANDOFF-*
