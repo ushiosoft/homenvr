@@ -34,3 +34,23 @@ def test_env_secrets_with_yaml_syntax_are_literal(tmp_path, monkeypatch):
     monkeypatch.setenv("NVR_PASSWORD", "a: b # c")
     cfg = load(p)
     assert cfg.ui_password == "!123456#"
+
+
+def test_config_file_needs_at_least_one_camera(tmp_path):
+    import pytest
+    from app.config import load
+    p = tmp_path / "config.yml"
+    p.write_text("storage_dir: /tmp/x\ncameras: []\n")
+    with pytest.raises(ValueError, match="at least one camera"):
+        load(p)
+    p.write_text("storage_dir: /tmp/x\ncameras: [{id: front, record_url: rtsp://x/1, live_url: rtsp://x/2}]\n")
+    assert [c.id for c in load(p).cameras] == ["front"]
+
+
+def test_any_number_of_nvr_channels(tmp_path):
+    """Not tied to a 4-channel NVR: channel 10+ gives Hikvision's <channel><stream> path."""
+    cfg = parse({"nvr": {"host": "10.0.0.5", "password": "p"},
+                 "cameras": [{"channel": ch} for ch in range(1, 17)]})
+    assert len(cfg.cameras) == 16 and cfg.cameras[-1].id == "cam16"
+    assert cfg.cameras[9].record_url.endswith("/Streaming/Channels/1001")
+    assert cfg.cameras[15].live_url.endswith("/Streaming/Channels/1602")

@@ -8,7 +8,7 @@ upselling.
 
 Built and tested against a **DS-7804N-S1/W(B)** NVR with three
 **DS-IPC-K24H-LWT** cameras, but works with any Hikvision (or ONVIF/RTSP) NVR or
-IP camera. See [PROTOCOL.md](PROTOCOL.md) for how the device was investigated and
+IP camera, with any number of cameras (one or more). See [PROTOCOL.md](PROTOCOL.md) for how the device was investigated and
 how the camera↔NVR communication works.
 
 > Not affiliated with or endorsed by Hikvision. homenvr only **reads** streams
@@ -105,7 +105,8 @@ rarely need to edit the file after setup. Key sections:
 ```yaml
 nvr: { host: 192.168.1.64, port: 554, username: admin, password: ${NVR_PASSWORD} }
 cameras:
-  - { id: cam1, name: Front, channel: 1, live_codec: h264 }   # one per NVR channel
+  - { id: cam1, name: Front, channel: 1, live_codec: h264 }   # one entry per camera (at least one)
+  - { id: cam2, name: Back,  channel: 2, live_codec: h264 }
 segment_seconds: 600
 retention: { max_days: 60, max_gb: 0, min_free_gb: 20 }        # whichever limit hits first
 motion:    { enabled: true, sensitivity: 4.0, detect: true }   # detect = YOLOX person/vehicle labels
@@ -185,7 +186,7 @@ Why: H.264 main plays the original 2K in every browser with no server CPU (HEVC
 needs a transcode in most browsers — ~0.7 core per viewer on an old Xeon); an
 H.264 sub-stream is passed through by go2rtc instead of being transcoded. A 2 s
 keyframe interval keeps seeking precise. H.264 roughly doubles storage versus
-H.265 (~50 GB/day for three cameras at these settings). Use CBR only for a camera
+H.265 (~17 GB/day per camera at these settings). Use CBR only for a camera
 whose Wi-Fi link is marginal. Turn the NVR's own motion detection off (homenvr
 does its own) and NTP on.
 
@@ -197,7 +198,8 @@ codec is re-checked every 10 minutes; restart homenvr to apply at once).
 - A typical server install: code + `.env` + `config.yml` in `~/srv/homenvr` (a git
   clone), data in `RECORDINGS_DIR` (recordings, `grace/`, `saved/`, `thumbs/`,
   `events.db`, `settings.json`). An older 8-core Xeon without AVX handles three
-  cameras.
+  cameras; each camera adds two ffmpeg readers and, with `live_codec: h264`, one
+  small transcode.
 - Deploy:
   `cd ~/srv/homenvr && git pull && docker compose up -d --build` (the server's `.env` has
   `COMPOSE_PROFILES=tailscale`, which brings up the Tailscale sidecar too).

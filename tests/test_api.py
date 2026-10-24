@@ -174,3 +174,25 @@ def test_site_timezone(tmp_path, monkeypatch):
     monkeypatch.setenv("TZ", "x; rm -rf")
     with client(tmp_path) as c:
         assert c.get("/api/site").json() == {"tz": None}
+
+
+def test_api_works_with_one_or_many_cameras(tmp_path):
+    """Nothing in the API assumes three cameras."""
+    import pytest
+    for n in (1, 5):
+        root = tmp_path / f"n{n}"
+        cams = [{"id": f"c{i}", "name": f"Cam {i}", "record_url": f"rtsp://x/{i}", "live_url": f"rtsp://x/{i}s"}
+                for i in range(1, n + 1)]
+        cfg = parse({"storage_dir": str(root / "rec"), "live_dir": str(root / "live"), "cameras": cams})
+        base = 1760500000
+        with TestClient(create_app(cfg, run_recorders=False)) as c:
+            make(root / "rec", f"c{n}", base, 600, size=5000)
+            assert [x["id"] for x in c.get("/api/cameras").json()] == [f"c{i}" for i in range(1, n + 1)]
+            tl = c.get("/api/timeline", params={"start": base, "end": base + 3600}).json()
+            assert len(tl["cameras"]) == n
+            assert c.get("/api/incidents", params={"start": base, "end": base + 3600}).status_code == 200
+            assert c.get("/api/status").status_code == 200
+            assert len(c.get("/api/config").json()["cameras"]) == n
+            r = c.post("/api/config", json={"cameras": {f"c{n}": {"name": "Last one"}}})
+            assert r.status_code == 200, r.text
+            assert c.get("/api/cameras").json()[-1]["name"] == "Last one"

@@ -61,8 +61,8 @@ def sub_sources(cam: Camera, cfg: Config) -> list[str]:
 
     With the go2rtc sidecar configured, its internal RTSP restream comes first: it
     already holds one connection per camera (for WebRTC), so live HLS and motion
-    detection share it instead of each opening their own on the NVR (12 -> 6 NVR
-    streams for 3 cameras), and its output is H.264 (passed through or converted
+    detection share it instead of each opening their own on the NVR (4 -> 2 NVR
+    streams per camera), and its output is H.264 (passed through or converted
     once). The NVR's own URL stays as the fallback.
     """
     out = []

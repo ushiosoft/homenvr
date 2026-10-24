@@ -244,4 +244,7 @@ def parse(raw: dict) -> Config:
 
 def load(path: str | os.PathLike | None = None) -> Config:
     path = Path(path or os.environ.get("HOMENVR_CONFIG", "/config/config.yml"))
-    return parse(_interpolate(yaml.safe_load(path.read_text()) or {}))
+    cfg = parse(_interpolate(yaml.safe_load(path.read_text()) or {}))
+    if not cfg.cameras:
+        raise ValueError(f"{path}: configure at least one camera under 'cameras:'")
+    return cfg
