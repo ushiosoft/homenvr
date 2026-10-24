@@ -16,7 +16,7 @@ forwarded, works behind CGNAT, per-device access control. Free for personal use.
 
 ### A1. Tailscale on the host  ← simplest, nothing to change in homenvr
 
-Install Tailscale on the rack server itself:
+Install Tailscale on the homenvr host itself:
 
 ```bash
 curl -fsSL https://tailscale.com/install.sh | sh
@@ -27,7 +27,7 @@ Then from any device also on your tailnet (phone with the Tailscale app, laptop,
 etc.) open:
 
 ```
-http://<rack-server-tailscale-ip>:8971
+http://<host-tailscale-ip>:8971
 ```
 
 (Find the IP with `tailscale ip -4`, or use its MagicDNS name,
@@ -36,9 +36,9 @@ exactly as is. Keep homenvr's login on as a second layer.
 
 ### A2. Tailscale as a Docker sidecar  (fully containerized, HTTPS)
 
-If you'd rather not install anything on the host, an optional overlay runs
-Tailscale in a container and serves homenvr on your tailnet over HTTPS (with an
-automatic tailnet TLS cert):
+If you'd rather not install anything on the host, the optional `tailscale`
+service in `docker-compose.yml` runs Tailscale in a container and serves homenvr
+on your tailnet over HTTPS (with an automatic tailnet TLS cert):
 
 1. Create an auth key at
    <https://login.tailscale.com/admin/settings/keys> (reusable; ephemeral off so
@@ -47,18 +47,17 @@ automatic tailnet TLS cert):
    ```
    TS_AUTHKEY=tskey-auth-xxxxxxxxxxxx
    ```
-3. Start with the overlay:
+3. Turn the sidecar on with `COMPOSE_PROFILES=tailscale` in `.env`, then:
    ```bash
-   docker compose up -d        # with COMPOSE_PROFILES=tailscale in .env
+   docker compose up -d
    ```
 4. Open **https://homenvr.<your-tailnet>.ts.net** from any device on the tailnet.
 
-The sidecar (the `tailscale` service in `docker-compose.yml`, profile `tailscale`, +
-`ts-serve.json`) proxies the
-tailnet to homenvr over the internal Docker network; your LAN access on `:8971`
-keeps working unchanged. Verified: the sidecar boots in userspace mode and
-registers with the Tailscale control plane; the only input it needs is your
-`TS_AUTHKEY`.
+The sidecar (with `ts-serve.json`) proxies the tailnet to homenvr over the
+internal Docker network; LAN access on `:8971` keeps working unchanged. It runs
+in userspace mode, and the only input it needs is your `TS_AUTHKEY`. Keep the
+`ts-state` volume: it holds the node's identity, so the name and IP survive
+restarts.
 
 Low-latency live view (WebRTC, the go2rtc sidecar in `docker-compose.yml`) also
 works remotely: `ts-serve.json` forwards TCP 8555 to go2rtc, and go2rtc advertises
@@ -79,7 +78,7 @@ URL for family who won't install Tailscale. Put **Cloudflare Access** in front s
 it isn't open to the world.
 
 ```bash
-# on the rack server, after creating a tunnel in the Cloudflare dashboard:
+# on the homenvr host, after creating a tunnel in the Cloudflare dashboard:
 cloudflared tunnel run --url http://localhost:8971 <tunnel-name>
 ```
 
@@ -90,8 +89,7 @@ policy restricting it to your email. homenvr's own login remains a second layer.
 
 ## Security notes
 
-- **Set a real `UI_PASSWORD`** before exposing homenvr beyond the LAN. The test
-  value (`user` / `123456`) is fine only for local testing.
+- **Set a strong `UI_PASSWORD`** before exposing homenvr beyond the LAN.
 - Prefer Tailscale/Access over a bare router port-forward. If you must
   port-forward, put a reverse proxy with TLS and IP allowlisting in front.
 - The NVR itself should stay off the internet — homenvr is the only thing that

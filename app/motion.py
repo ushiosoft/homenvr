@@ -36,7 +36,7 @@ _YAVG_RE = re.compile(rb"lavfi\.signalstats\.YAVG=([0-9.]+)")
 ANALYZE_FPS = 5
 ANALYZE_WIDTH = 320
 # Frames in a row the score must reach the threshold for an event (at ANALYZE_FPS: 0.4 s).
-# A single-frame jump is not motion: Main gate's exposure steps (whole-picture
+# A single-frame jump is not motion: a camera's exposure steps (whole-picture
 # brightness changes, ~200/hour in daylight) and decode glitches make exactly that,
 # while anything that really moves changes several frames in a row.
 CONFIRM_FRAMES = 2
