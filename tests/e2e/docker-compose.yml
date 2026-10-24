@@ -4,7 +4,7 @@ services:
     image: bluenviron/mediamtx:1.9.3
     volumes: ["./mediamtx.yml:/mediamtx.yml:ro"]
   cameras:
-    image: rea-toolbox
+    image: linuxserver/ffmpeg:7.1.1   # any image with sh + ffmpeg (libx264, libx265)
     entrypoint: ["sh", "/publish.sh"]
     volumes: ["./publish.sh:/publish.sh:ro"]
     depends_on: [nvr]

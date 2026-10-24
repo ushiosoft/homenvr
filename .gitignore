@@ -1,5 +1,7 @@
 .env
 config.yml
+# ... except the e2e stack's (test values only)
+!tests/e2e/config.yml
 recordings/
 __pycache__/
 *.pyc

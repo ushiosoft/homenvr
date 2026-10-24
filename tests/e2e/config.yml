@@ -1,0 +1,8 @@
+nvr: {host: nvr, port: 8554, username: admin, password: "${NVR_PASSWORD}"}
+cameras:
+  - {id: cam1, name: Front, channel: 1}
+  - {id: cam2, name: Garage, channel: 2}
+  - {id: cam3, name: Yard, channel: 3, live_codec: h264}
+segment_seconds: 20
+retention: {max_days: 30, min_free_gb: 1}
+ui: {username: admin, password: test}
