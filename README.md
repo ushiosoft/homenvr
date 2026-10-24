@@ -1,5 +1,7 @@
 # homenvr
 
+![The Cameras page with three test-pattern cameras](docs/screenshot.png)
+
 A self-hosted replacement for the Hikvision phone app. homenvr records your
 cameras straight to your own server over RTSP, so you get **unlimited storage**
 (NAS / rack disk), **fast local playback**, a **motion timeline**, **push alerts
@@ -7,9 +9,10 @@ with snapshots**, and **remote access** — with no cloud relay, no ads, and no
 upselling.
 
 Built and tested against a **DS-7804N-S1/W(B)** NVR with three
-**DS-IPC-K24H-LWT** cameras, but works with any Hikvision (or ONVIF/RTSP) NVR or
-IP camera, with any number of cameras (one or more). See [PROTOCOL.md](PROTOCOL.md) for how the device was investigated and
-how the camera↔NVR communication works.
+**DS-IPC-K24H-LWT** cameras. It should work with any Hikvision NVR or IP camera,
+and with other RTSP cameras through per-camera `record_url` / `live_url` — with
+any number of cameras, from one up. See [PROTOCOL.md](PROTOCOL.md) for how the
+device was investigated and how the camera↔NVR communication works.
 
 > Not affiliated with or endorsed by Hikvision. homenvr only **reads** streams
 > from your NVR using credentials you supply; it never modifies the device or its
@@ -25,7 +28,7 @@ and stores recordings on hardware you control.
 ## Features
 
 - **Cameras page** — one page for live and review. Live: multi-camera wall,
-  **WebRTC** (~0.5 s behind) with HLS fallback, per-camera rotate, digital
+  **WebRTC** (~1 s behind) with HLS fallback, per-camera rotate, digital
   zoom/pan, focus view, sound. Review: incidents list, per-camera swimlanes with
   motion marks, event thumbnails, synchronized multi-camera playback. Works on
   phones.
@@ -84,10 +87,10 @@ and stores recordings on hardware you control.
 ## Quick start
 
 ```bash
-git clone https://github.com/ushiosoft/hikvision-homenvr.git
-cd hikvision-homenvr
+git clone https://github.com/ushiosoft/homenvr.git
+cd homenvr
 cp .env.example .env              # set NVR_PASSWORD, UI_PASSWORD, TZ, RECORDINGS_DIR
-cp config.example.yml config.yml  # set NVR host + cameras
+cp config.example.yml config.yml  # set the NVR address and your cameras
 docker compose up -d --build
 # with remote access: set COMPOSE_PROFILES=tailscale and TS_AUTHKEY in .env, then the same command
 ```
@@ -104,19 +107,20 @@ rarely need to edit the file after setup. Key sections:
 
 ```yaml
 nvr: { host: 192.168.1.64, port: 554, username: admin, password: ${NVR_PASSWORD} }
-cameras:
-  - { id: cam1, name: Front, channel: 1, live_codec: h264 }   # one entry per camera (at least one)
-  - { id: cam2, name: Back,  channel: 2, live_codec: h264 }
-segment_seconds: 600
-retention: { max_days: 60, max_gb: 0, min_free_gb: 20 }        # whichever limit hits first
-motion:    { enabled: true, sensitivity: 4.0, detect: true }   # detect = YOLOX person/vehicle labels
-alerts:    { notifier: none, motion_push: true, push_on: person }  # push_on: person | person_vehicle | motion
+cameras:                                    # one entry per camera (at least one)
+  - { id: cam1, name: Front door, channel: 1 }
+  - { id: cam2, name: Driveway,   channel: 2, rotation: 90 }
+retention: { max_days: 30, max_gb: 0, min_free_gb: 20 }   # past a limit: grace first, then deleted
+motion:    { enabled: true, sensitivity: 1.0, detect: true }   # % of the picture; person/vehicle/animal labels
+alerts:    { notifier: ntfy, ntfy_url: "https://ntfy.sh/your-topic", motion_push: true, push_on: person }
 ui:        { username: admin, password: ${UI_PASSWORD} }
-webrtc_api: http://go2rtc:1984                                 # go2rtc sidecar; empty = HLS only
+webrtc_api: http://go2rtc:1984                             # go2rtc sidecar; empty = HLS only
 ```
 
-See `config.example.yml` for all options (per-camera `live_codec`/`audio`,
-custom RTSP URLs, SMTP, motion-snapshot push, etc.).
+`push_on` is `person`, `person_vehicle`, `person,animal`, `person,vehicle,animal`
+or `motion` (every event), globally or per camera. See `config.example.yml` for
+every option (per-camera `live_codec`/`audio`, custom RTSP URLs, SMTP/Telegram,
+auto-save limits…).
 
 Any number of cameras works, from one up; how the Cameras page lays them out is
 described in [docs/multi-camera-view.md](docs/multi-camera-view.md).
@@ -132,7 +136,7 @@ docker compose exec homenvr python -m app.importer \
 
 ```
 NVR ──main (2K)──────────────► homenvr recorder ──► 10-min MP4 files (/recordings)
-    ──sub (640x360)──► go2rtc ─┬─ WebRTC ──────────► browser (live, ~0.5 s)
+    ──sub (640x360)──► go2rtc ─┬─ WebRTC ──────────► browser (live, ~1 s)
                                └─ RTSP restream ──► homenvr: live HLS + motion
                                                       └─ event ─► YOLOX burst ─► push
 ```
@@ -150,15 +154,17 @@ NVR ──main (2K)──────────────► homenvr recorde
   workers read the NVR directly and retry go2rtc every 5 minutes.
 - **Motion → labels → push**: the motion worker scores frame differences at 5 fps;
   on an event homenvr waits ~4.5 s, decodes a ~10 s burst (2 fps) from the live
-  HLS segments, runs YOLOX-tiny on each frame, keeps the frame with the most
-  confident person (else vehicle) as the event thumbnail and push photo, and
-  pushes if the camera's `push_on` policy matches.
+  HLS segments, runs YOLOX-tiny on each frame, keeps the best frame (person, else
+  vehicle, else animal) as the event thumbnail and push photo, and pushes if the
+  camera's `push_on` policy matches. About 20 s later a second pass on the full-
+  resolution recording refines the labels and boxes, and sends a late push if it
+  finds what the first pass missed.
 - **Review playback**: H.264 recordings are remuxed (stream copy, ~0 CPU) from the
   keyframe before the requested time; HEVC is direct-played in browsers that
   support it, else transcoded to 720p/480p H.264.
 
 Details of the NVR protocol and the discovery process are in
-[PROTOCOL.md](PROTOCOL.md); feature history in [ROADMAP.md](ROADMAP.md).
+[PROTOCOL.md](PROTOCOL.md); feature history and open items in [ROADMAP.md](ROADMAP.md).
 
 | Component | Role |
 | --- | --- |
@@ -166,7 +172,7 @@ Details of the NVR protocol and the discovery process are in
 | `app/webrtc.py` | go2rtc stream registration, preload, WebRTC signalling |
 | `app/storage.py` | segment index, two-stage retention, grace/saved, export |
 | `app/motion.py` / `app/events.py` | motion detection + event store |
-| `app/detect.py` | YOLOX-tiny / MobileNet-SSD person/vehicle labelling |
+| `app/detect.py` | YOLOX-tiny person / vehicle / animal labelling |
 | `app/incidents.py` | clustering events into incidents / busy periods |
 | `app/zones.py` | per-camera ignore zones (detection filter + motion mask) |
 | `app/clips.py` | saved clips: keyframe-aligned cuts, seekable copies, auto-save |
@@ -203,9 +209,8 @@ codec is re-checked every 10 minutes; restart homenvr to apply at once).
   `events.db`, `settings.json`). An older 8-core Xeon without AVX handles three
   cameras; each camera adds two ffmpeg readers and, with `live_codec: h264`, one
   small transcode.
-- Deploy:
-  `cd ~/srv/homenvr && git pull && docker compose up -d --build` (the server's `.env` has
-  `COMPOSE_PROFILES=tailscale`, which brings up the Tailscale sidecar too).
+- Update: `git pull && docker compose up -d --build` (with `COMPOSE_PROFILES=tailscale`
+  in `.env`, the Tailscale sidecar comes up too).
   When `go2rtc.yaml` changed, add `--force-recreate go2rtc` (git replaces the file;
   a bind-mounted single file keeps pointing at the old one).
 - Containers: `homenvr` (UI/API on :8971), `homenvr-go2rtc` (WebRTC media on 8555
@@ -222,11 +227,23 @@ codec is re-checked every 10 minutes; restart homenvr to apply at once).
 ```bash
 pip install -r requirements-dev.txt
 pytest                       # unit tests
-tests/e2e/                   # docker-compose stack with a simulated NVR + cameras
+sh tests/e2e/check.sh        # end to end, in Docker (~2 min)
 ```
 
-The e2e stack runs MediaMTX as a fake Hikvision NVR with synthetic cameras and
-exercises record → playback → export end to end.
+The e2e stack runs MediaMTX as a fake Hikvision NVR fed by three synthetic
+cameras, and checks record → live → playback → export through the API.
+
+## Status and limitations
+
+- Used daily with one Hikvision NVR and three Wi-Fi cameras; other setups are
+  less tested — issues and pull requests are welcome.
+- No ONVIF discovery: cameras are listed in `config.yml` by NVR channel or RTSP URL.
+- Every camera tile streams continuously; beyond ~9 cameras the browser and the
+  server's playback transcodes get busy (see
+  [docs/multi-camera-view.md](docs/multi-camera-view.md)).
+- Motion detection is frame differencing on the sub-stream: very small subjects
+  (a rabbit at night) may not trigger it.
+- The container runs as root (it writes to the recordings volume).
 
 ## Security
 
@@ -235,6 +252,7 @@ exercises record → playback → export end to end.
 - Keep the NVR off the public internet — homenvr is the only thing that needs to
   be reachable, and only to you.
 - `.env`, `config.yml`, `recordings/`, and the settings overlay are gitignored.
+- Found a vulnerability? See [SECURITY.md](SECURITY.md).
 
 ## License
 
