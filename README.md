@@ -118,6 +118,9 @@ webrtc_api: http://go2rtc:1984                                 # go2rtc sidecar;
 See `config.example.yml` for all options (per-camera `live_codec`/`audio`,
 custom RTSP URLs, SMTP, motion-snapshot push, etc.).
 
+Any number of cameras works, from one up; how the Cameras page lays them out is
+described in [docs/multi-camera-view.md](docs/multi-camera-view.md).
+
 ### Backfill the SD card
 
 ```bash

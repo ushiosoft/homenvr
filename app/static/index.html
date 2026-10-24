@@ -66,6 +66,7 @@
   .filters .n { font-family:var(--mono); font-size:12px; opacity:.75; margin-left:6px; }
   .seg { display:flex; background:var(--panel2); border:1px solid var(--line2); border-radius:8px; padding:4px; gap:4px; }
   .seg button { padding:0 14px; height:34px; border:0; border-radius:6px; cursor:pointer; background:transparent; color:var(--muted); }
+  .seg.camseg { flex-wrap:wrap; }   /* the saved player's camera picker: any number of cameras */
   .seg button.on { background:#262c36; color:var(--fg); font-weight:500; }
   .toolbar .seg.layout { margin-left:auto; }
 
@@ -74,10 +75,15 @@
   .gridcol { flex:999 1 820px; min-width:0; display:flex; flex-direction:column; gap:12px; }
 
   /* ---- camera grid ---- */
-  .camgrid { display:grid; gap:8px; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); }
+  .camgrid { display:grid; gap:8px; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); grid-auto-flow:row dense; }
   .tile { position:relative; background:#000; border-radius:10px; overflow:hidden; aspect-ratio:16/9; min-height:0; outline:2px solid transparent; outline-offset:-2px; }
   .tile.portrait { aspect-ratio:9/16; }
   .camgrid.mix .tile.portrait { grid-row:span 2; aspect-ratio:auto; }
+  /* Grid among landscape cameras: a portrait one takes two rows of its column, so rows keep
+     the landscape height; ::before makes it exactly two 16:9 cells + the gap tall (the
+     picture is pillarboxed inside), which also holds up rows with no landscape tile. */
+  .camgrid:not(.mix):not(.focus):not(.strip):not(.allpor) .tile.portrait { grid-row:span 2; aspect-ratio:auto; }
+  .camgrid:not(.mix):not(.focus):not(.strip):not(.allpor) .tile.portrait::before { content:''; display:block; padding-top:calc(112.5% + 8px); }
   .tile.sel { outline-color:rgba(96,165,250,.55); }
   /* Detection/motion boxes over review playback: laid out exactly like the video (see
      applyXform), drawn in the video's own pixels, letterboxed like object-fit:contain. */
@@ -116,6 +122,13 @@
   .camgrid.focus .tile:not(.sel) .ctls { display:none; }
   .camgrid.focus .tile:not(.sel) .side { display:block; position:absolute; left:0; right:0; bottom:0; padding:18px 10px 8px; font-size:12px; color:#c7cdd6; background:linear-gradient(transparent, rgba(0,0,0,.8)); z-index:2; pointer-events:none; }
   .camgrid.focus .tile:not(.sel) .side b { color:#93c5fd; font-weight:500; float:right; }
+  /* Focus with more cameras than fit beside it: the selected one full width, the others in
+     a strip below (layoutGrid sets the columns). */
+  .camgrid.strip .tile { aspect-ratio:16/9; }
+  .camgrid.strip .tile.sel { grid-column:1 / -1; border-radius:12px; }
+  .camgrid.strip .tile:not(.sel) { cursor:pointer; }
+  .camgrid.strip .tile:not(.sel) .ctls, .camgrid.strip .tile:not(.sel) .badge { display:none; }
+  .camgrid.strip .tile:not(.sel) .name { font-size:11px; padding:2px 6px; }
 
   /* ---- transport ---- */
   .transport { display:flex; align-items:center; gap:6px; background:var(--panel2); border:1px solid var(--line2); border-radius:10px; padding:6px 10px; flex-wrap:wrap; min-height:56px; }
@@ -159,6 +172,7 @@
   .icard .tend { color:var(--muted); font-weight:400; }
   .icard .thumbs { display:flex; gap:4px; margin:8px 0 6px; height:58px; overflow:hidden; }
   .icard .thumbs img { height:58px; width:auto; min-width:32px; border-radius:5px; display:block; background:#0b0d10; }
+  .icard .thumbs .more { flex:none; display:flex; align-items:center; padding:0 10px; border-radius:5px; background:#0b0d10; color:var(--muted); font-size:12px; }
   .icard .row3 { display:flex; gap:6px; color:var(--muted); font-size:12px; width:100%; }
   .icard .row3 .mono { margin-left:auto; }
   .chip { font-size:11px; padding:2px 8px; border-radius:999px; white-space:nowrap; background:#252b34; color:#cbd5e1; }
@@ -290,6 +304,7 @@
     #modal .box.player { padding:10px 8px 8px; }
     .pbar { gap:8px; }
     .camseg { width:100%; } .camseg button { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .camseg button { flex-basis:22%; }
     .pctl { margin:0 auto; }
   }
   .scard.clip { margin:0; padding:0; overflow:hidden; display:flex; flex-direction:column; max-width:none; }
@@ -297,6 +312,7 @@
   .clip .thumbs.n2 { grid-template-columns:1fr 1fr; } .clip .thumbs.n3 { grid-template-columns:1fr 1fr 1fr; }
   .clip .thumb { position:relative; border:0; padding:0; background:#000; cursor:pointer; display:block; aspect-ratio:16/9; }
   .clip .thumbs.n2 .thumb, .clip .thumbs.n3 .thumb { aspect-ratio:3/4; }
+  .clip .thumbs.many .thumb { aspect-ratio:16/9; }
   .clip .thumb .cam { position:absolute; left:6px; bottom:6px; font-size:11px; padding:2px 6px; border-radius:4px; background:rgba(10,12,15,.75); color:#e2e8f0; }
   .clip .thumbs.n2 .play, .clip .thumbs.n3 .play { width:36px; height:36px; }
   .clip .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -387,9 +403,10 @@
     .toolbar { order:0; } .gridcol { order:1; } section.timeline { order:2; } aside.incidents { order:3; }
     .gridcol { flex-basis:100%; }
     /* Phone: always the focus arrangement — selected camera full width, others as chips. */
-    .camgrid, .camgrid.focus, .camgrid.mix { grid-template-columns:repeat(auto-fit, minmax(0, 1fr)); gap:8px; }
+    /* ... as many chips per row as layoutGrid's --pcols says, wrapping onto more rows. */
+    .camgrid, .camgrid.focus, .camgrid.mix, .camgrid.strip { grid-template-columns:var(--pcols, 1fr) !important; gap:8px; }
     .camgrid .tile.sel { grid-column:1 / -1 !important; grid-row:1 !important; aspect-ratio:16/9 !important; }
-    .camgrid .tile:not(.sel) { grid-column:auto !important; grid-row:2 !important; aspect-ratio:auto !important; height:58px; cursor:pointer; }
+    .camgrid .tile:not(.sel) { grid-column:auto !important; grid-row:auto !important; aspect-ratio:auto !important; height:58px; cursor:pointer; }
     .camgrid .tile:not(.sel) .ctls, .camgrid .tile:not(.sel) .badge, .camgrid .tile:not(.sel) .over { display:none; }
     .camgrid .tile:not(.sel) .side { display:none !important; }
     .camgrid .tile:not(.sel) .name { top:auto; bottom:4px; left:4px; font-size:11px; padding:2px 6px; }
@@ -804,26 +821,41 @@ function buildGrid() {
   }
   layoutGrid();
 }
+// Any number of cameras (see docs/multi-camera-view.md). Grid: one row up to three
+// cameras, then the smallest square that holds them (4 -> 2x2, 5-9 -> 3 wide, 10-16 ->
+// 4 wide...), so the grid stays about as tall as it is wide whatever the count.
+const gridCols = n => n <= 3 ? Math.max(1, n) : Math.ceil(Math.sqrt(n));
+const FOCUS_SIDE_MAX = 3;   // focus: up to this many others in a column beside the big picture...
+const STRIP_COLS = 6;       // ... more go in a strip below it, this many across
+const PHONE_CHIP_COLS = 4;  // phone: the others as chips under the selected camera, wrapping
 function layoutGrid() {
-  const g = $('#grid');
+  const g = $('#grid'), n = cameras.length;
   const por = cameras.filter(c => portrait(c.id)), land = cameras.filter(c => !portrait(c.id));
   // One portrait camera + two landscape: portrait spans both rows, 9fr:14fr makes the
   // heights line up (16 units tall each side).
   const mix = S.layout === 'grid' && por.length === 1 && land.length === 2;
+  const focus = S.layout === 'focus' && !isWall && n > 1;
+  const strip = focus && n - 1 > FOCUS_SIDE_MAX;
   g.classList.toggle('mix', mix);
-  g.classList.toggle('focus', S.layout === 'focus' && !isWall);
-  g.style.gridTemplateColumns = mix ? 'minmax(0, 9fr) minmax(0, 14fr)' : '';
-  if (isWall) {
-    g.style.gridTemplateColumns = mix ? 'minmax(0, 9fr) minmax(0, 14fr)'
-      : `repeat(${Math.ceil(Math.sqrt(cameras.length))}, minmax(0, 1fr))`;
-  }
+  g.classList.toggle('focus', focus && !strip);
+  g.classList.toggle('strip', strip);
+  g.classList.toggle('allpor', !land.length);
+  $('.seg.layout').classList.toggle('hidden', n < 2);   // one camera: grid and focus are the same
+  let cols = '';
+  if (mix) cols = 'minmax(0, 9fr) minmax(0, 14fr)';
+  else if (strip) cols = `repeat(${Math.min(n - 1, STRIP_COLS)}, minmax(0, 1fr))`;
+  else if (isWall) cols = `repeat(${Math.ceil(Math.sqrt(n))}, minmax(0, 1fr))`;
+  // All portrait: tall tiles side by side, up to six across.
+  else if (!focus) cols = `repeat(${land.length ? gridCols(n) : Math.min(n, 6)}, minmax(0, 1fr))`;
+  g.style.gridTemplateColumns = cols;
+  g.style.setProperty('--pcols', `repeat(${clamp(n - 1, 1, PHONE_CHIP_COLS)}, minmax(0, 1fr))`);
   for (const c of cameras) {
     const t = tiles[c.id];
     t.el.classList.toggle('portrait', portrait(c.id));
     t.el.classList.toggle('sel', c.id === S.selCam);
-    t.el.style.order = mix ? (portrait(c.id) ? 0 : 1) : (S.layout === 'focus' && c.id === S.selCam ? -1 : 0);
+    t.el.style.order = mix ? (portrait(c.id) ? 0 : 1) : (focus && c.id === S.selCam ? -1 : 0);
     if (isWall && mix && portrait(c.id)) t.el.style.gridRow = 'span 2';
-    else if (S.layout === 'focus' && !isWall && c.id === S.selCam) t.el.style.gridRow = `1 / span ${Math.max(1, cameras.length - 1)}`;
+    else if (focus && !strip && c.id === S.selCam) t.el.style.gridRow = `1 / span ${Math.max(1, n - 1)}`;
     else t.el.style.gridRow = '';
   }
   updateTileSides();
@@ -1296,6 +1328,7 @@ function syncTick() {
   const chip = $('#syncchip');
   const loading = cameras.filter(c => tiles[c.id].state === 'loading').length;
   if (loading) { chip.className = 'syncchip wait'; chip.textContent = `loading ${loading} camera${loading > 1 ? 's' : ''}…`; }
+  else if (cameras.length < 2) { chip.className = 'syncchip'; chip.textContent = ''; }   // nothing to keep in sync
   else if (inSync === withFootage) { chip.className = 'syncchip'; chip.textContent = withFootage === cameras.length ? `${withFootage} cameras in sync` : `${withFootage} of ${cameras.length} cameras have footage`; }
   else { chip.className = 'syncchip wait'; chip.textContent = 'syncing…'; }
   for (const c of cameras) setBadge(c.id);
@@ -1492,7 +1525,8 @@ function renderIncidents() {
   for (const i of items) {
     if (i.kind === 'busy') { parts.push(busyCard(i)); continue; }
     const on = cur && cur.id === i.id;
-    const thumbs = i.thumbs.slice(0, 3).map(th => lazyImg(thumbUrl(th.event_id), camName(th.camera))).join('');
+    const thumbs = i.thumbs.slice(0, 3).map(th => lazyImg(thumbUrl(th.event_id), camName(th.camera))).join('')
+      + (i.thumbs.length > 3 ? `<span class="more" title="${i.thumbs.length} cameras">+${i.thumbs.length - 3}</span>` : '');
     parts.push(`<button class="icard${on ? ' on' : ''}${i.likely_noise ? ' noise' : ''}" data-inc="${i.id}">
       <span class="row1"><span class="t">${fmtTime(i.start)}${i.end - i.start >= 1 ? `<span class="tend">–${fmtTime(i.end)}</span>` : ''}</span><span class="dur">${fmtDur(i.end - i.start + 1)}</span>
         <span class="chip playing${on ? '' : ' hidden'}">playing</span>
@@ -1960,7 +1994,9 @@ function savedCard(g) {
   const first = g[0], t0 = clipStart(first.name), auto = first.auto;
   const label = clipKey(first.name).split('-').slice(2).filter(x => x !== 'auto' && x !== 'kept').join(' ');
   const card = document.createElement('div'); card.className = 'scard clip';
-  card.innerHTML = `<div class="thumbs n${Math.min(g.length, 3)}">${g.map((c, i) => `<button class="thumb" data-i="${i}" aria-label="Play ${esc(camName(clipCam(c)))}">
+  // Up to three side by side (tall crops); four or more as a grid of 16:9 thumbnails.
+  const tcols = g.length <= 3 ? g.length : g.length === 4 ? 2 : 3;
+  card.innerHTML = `<div class="thumbs n${Math.min(g.length, 3)}${g.length > 3 ? ' many' : ''}" style="grid-template-columns:repeat(${tcols}, minmax(0, 1fr))">${g.map((c, i) => `<button class="thumb" data-i="${i}" aria-label="Play ${esc(camName(clipCam(c)))}">
         <img alt="" loading="lazy" src="api/saved/${encodeURIComponent(c.name)}/thumb" onerror="this.classList.add('broken')">
         <span class="play">${ICON_PLAY}</span><span class="cam">${esc(camName(clipCam(c)))}</span></button>`).join('')}</div>
     <div class="meta"><b>${esc(label || (auto ? 'Pushed event' : 'Saved clip'))}${t0 ? ` · ${fmtDay(t0)} ${fmtTime(t0)}` : ''}</b>
