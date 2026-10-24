@@ -54,3 +54,13 @@ def test_any_number_of_nvr_channels(tmp_path):
     assert len(cfg.cameras) == 16 and cfg.cameras[-1].id == "cam16"
     assert cfg.cameras[9].record_url.endswith("/Streaming/Channels/1001")
     assert cfg.cameras[15].live_url.endswith("/Streaming/Channels/1602")
+
+
+def test_config_example_loads(monkeypatch):
+    """config.example.yml is what new users copy: it must stay loadable and current."""
+    from pathlib import Path
+    from app.config import load
+    monkeypatch.setenv("NVR_PASSWORD", "x")
+    monkeypatch.setenv("UI_PASSWORD", "y")
+    cfg = load(Path(__file__).parent.parent / "config.example.yml")
+    assert len(cfg.cameras) >= 1 and cfg.ui_password == "y" and cfg.webrtc_api

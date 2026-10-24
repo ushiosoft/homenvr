@@ -87,8 +87,9 @@ class Alerts:
     check_interval: int = 60
     motion_push: bool = False  # push a snapshot notification on motion
     motion_push_cooldown: int = 0  # min seconds between motion pushes per camera (0 = every event)
-    # Which motion events are pushed: "person" (default), "person_vehicle", or
-    # "motion" (every event). Needs object detection; without it, every event is.
+    # Which motion events are pushed: a comma list of person / vehicle / animal
+    # ("person_vehicle" = "person,vehicle"), or "motion" (every event). Needs object
+    # detection; without it, every event is.
     push_on: str = "person"
     # Address the UI is reachable at from a phone (e.g. https://homenvr.<tailnet>.ts.net);
     # motion pushes then link to the event. "" = no link.
@@ -108,11 +109,9 @@ class AutoSave:
 @dataclass
 class Motion:
     enabled: bool = False
-    # "scene" score threshold (0-1); higher = less sensitive. ffmpeg scdet.
     sensitivity: float = 1.0  # % of the picture that must clearly change (app/motion.py); higher = less sensitive
     min_gap_seconds: float = 8.0  # merge detections closer than this into one event
-    cooldown_seconds: float = 3.0
-    detect: bool = True  # label events person/vehicle via on-server object detection
+    detect: bool = True  # label events person/vehicle/animal via on-server object detection
     detect_confidence: float = 0.45
 
 
@@ -226,7 +225,6 @@ def parse(raw: dict) -> Config:
             enabled=bool(m.get("enabled", False)),
             sensitivity=float(m.get("sensitivity", 1.0)),
             min_gap_seconds=float(m.get("min_gap_seconds", 8.0)),
-            cooldown_seconds=float(m.get("cooldown_seconds", 3.0)),
             detect=bool(m.get("detect", True)),
             detect_confidence=float(m.get("detect_confidence", 0.45)),
         ),
