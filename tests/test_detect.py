@@ -9,11 +9,10 @@ def test_detector_graceful_without_model(tmp_path):
 
 
 def test_categories_mapping():
-    from app.detect import COCO_CAT, VOC_CAT
-    assert VOC_CAT["person"] == "person" and VOC_CAT["car"] == VOC_CAT["motorbike"] == "vehicle"
+    from app.detect import COCO_CAT
     assert COCO_CAT[0] == "person" and {COCO_CAT[i] for i in (1, 2, 3, 5, 7)} == {"vehicle"}
     # Any animal is one label: bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe.
-    assert {COCO_CAT[i] for i in range(14, 24)} == {"animal"} and VOC_CAT["dog"] == VOC_CAT["bird"] == "animal"
+    assert {COCO_CAT[i] for i in range(14, 24)} == {"animal"}
 
 
 def _frames(n=8, w=160, h=90, mover_from=None):

@@ -1,12 +1,9 @@
-"""On-server object detection to label motion events as person / vehicle.
+"""On-server object detection to label motion events as person / vehicle / animal.
 
-Two backends, both run through OpenCV's DNN module on CPU (no PyTorch):
-- YOLOX-tiny (Megvii, Apache-2.0, COCO classes) — the default. On recorded
-  footage it found a person walking through the frame in ~3x as many frames as
-  MobileNet-SSD (brief and partial appearances especially), at a similar false
-  alarm rate, for ~65 ms per frame.
-- MobileNet-SSD (Caffe, Pascal VOC classes) — fallback when the YOLOX model
-  file is missing.
+YOLOX-tiny (Megvii, Apache-2.0, COCO classes) through OpenCV's DNN module on CPU
+(no PyTorch), ~65 ms per frame. On recorded footage it found a person walking
+through the frame in ~3x as many frames as MobileNet-SSD (the earlier model:
+brief and partial appearances especially), at a similar false alarm rate.
 
 Static objects are the main source of wrong labels (parked cars beyond a gate,
 covered patio furniture read as a "car"), so for a motion event's burst of
@@ -22,13 +19,6 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-VOC = ["background", "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
-       "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
-       "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
-VOC_CAT = {"person": "person", "car": "vehicle", "bus": "vehicle", "motorbike": "vehicle",
-           "bicycle": "vehicle", "train": "vehicle",
-           "bird": "animal", "cat": "animal", "cow": "animal", "dog": "animal", "horse": "animal",
-           "sheep": "animal"}
 # COCO class index -> category (0 person; 1 bicycle, 2 car, 3 motorcycle, 5 bus, 7 truck;
 # 14-23 bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe). Animals are
 # one category on purpose: what matters is "an animal", not which (COCO has no
@@ -89,13 +79,10 @@ class ObjectDetector:
             return
         self._cv2, self._np = cv2, np
         yolox = d / YOLOX_FILE
-        proto, weights = d / "MobileNetSSD_deploy.prototxt", d / "MobileNetSSD_deploy.caffemodel"
         try:
             if backend in ("auto", "yolox") and yolox.is_file():
                 self._net, self.backend = cv2.dnn.readNetFromONNX(str(yolox)), "yolox"
                 self._grid = self._yolox_grid(np)
-            elif backend in ("auto", "mobilenet") and proto.is_file() and weights.is_file():
-                self._net, self.backend = cv2.dnn.readNetFromCaffe(str(proto), str(weights)), "mobilenet"
             else:
                 log.warning("detector: no model files in %s; detection disabled", d)
                 return
@@ -125,7 +112,7 @@ class ObjectDetector:
         """Detections above the confidence threshold: (category, conf, (x1, y1, x2, y2))."""
         if not self.ok or img is None:
             return []
-        return self._yolox(img) if self.backend == "yolox" else self._mobilenet(img)
+        return self._yolox(img)
 
     def _conf(self, cat: str) -> float:
         return CONF_BY_CAT.get(cat, self.confidence)
@@ -218,22 +205,6 @@ class ObjectDetector:
         if self._cv2 is None:
             return None
         return self._cv2.imdecode(self._np.frombuffer(jpeg, self._np.uint8), self._cv2.IMREAD_COLOR)
-
-    def _mobilenet(self, img):
-        cv2 = self._cv2
-        h, w = img.shape[:2]
-        with self._lock:
-            self._net.setInput(cv2.dnn.blobFromImage(cv2.resize(img, (300, 300)), 0.007843, (300, 300), 127.5))
-            det = self._net.forward()
-        out = []
-        for i in range(det.shape[2]):
-            conf = float(det[0, 0, i, 2])
-            cat = VOC_CAT.get(VOC[int(det[0, 0, i, 1])])
-            cat = cat if cat and conf >= self._conf(cat) else None
-            if cat:
-                x1, y1, x2, y2 = det[0, 0, i, 3:7]
-                out.append((cat, conf, (int(x1 * w), int(y1 * h), int(x2 * w), int(y2 * h))))
-        return out
 
     @staticmethod
     def _yolox_grid(np):

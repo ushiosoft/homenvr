@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.12-slim-bookworm
 # libGL/libglib: OpenCV runtime deps even for the headless wheel's imdecode/dnn.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -6,13 +7,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-# Object detection for person/vehicle labels: YOLOX-tiny (Megvii, Apache-2.0) is the
-# default; MobileNet-SSD (Pascal VOC) is the fallback if the YOLOX file is missing.
-ADD https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.onnx /models/yolox_tiny.onnx
-ADD https://raw.githubusercontent.com/djmv/MobilNet_SSD_opencv/master/MobileNetSSD_deploy.prototxt /models/MobileNetSSD_deploy.prototxt
-ADD https://raw.githubusercontent.com/djmv/MobilNet_SSD_opencv/master/MobileNetSSD_deploy.caffemodel /models/MobileNetSSD_deploy.caffemodel
+# Downloads are pinned by checksum: a changed upstream file fails the build.
+# Object detection (person / vehicle / animal labels): YOLOX-tiny (Megvii, Apache-2.0).
+ADD --checksum=sha256:427cc366d34e27ff7a03e2899b5e3671425c262ea2291f88bb942bc1cc70b0f7 \
+    https://github.com/Megvii-BaseDetection/YOLOX/releases/download/0.1.1rc0/yolox_tiny.onnx /models/yolox_tiny.onnx
 # Vendored so the UI works without internet access.
-ADD https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js app/static/hls.min.js
+ADD --checksum=sha256:a91c218fd92b39c2c929b1a08400bc8e85df34a5d474dece920103a2c51675df \
+    https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js app/static/hls.min.js
 RUN chmod 644 /models/*
 COPY app app
 RUN chmod 644 app/static/hls.min.js
