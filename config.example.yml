@@ -53,6 +53,7 @@ alerts:
   # smtp: {host: smtp.example.com, port: 587, user: you, password: pw, to: you@example.com}
   stale_segment_seconds: 180   # health alert: recording but no new data this long
   check_interval: 60           # seconds between health checks
+  memory_alert_mb: 1500        # health alert: homenvr itself uses more memory than this (0 = off)
   motion_push: false           # push a snapshot when motion is detected
   push_on: person              # which events push: person | person_vehicle | person,animal |
                                #   person,vehicle,animal | motion (every event)

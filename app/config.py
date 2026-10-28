@@ -85,6 +85,9 @@ class Alerts:
     smtp: dict = field(default_factory=dict)
     stale_segment_seconds: int = 180  # recorder "running" but no new data this long
     check_interval: int = 60
+    # Alert when homenvr's own process uses more memory than this (0 = off): a leak
+    # once grew it to 9.8 GB and stalled the whole server before the kernel killed it.
+    memory_alert_mb: int = 1500
     motion_push: bool = False  # push a snapshot notification on motion
     motion_push_cooldown: int = 0  # min seconds between motion pushes per camera (0 = every event)
     # Which motion events are pushed: a comma list of person / vehicle / animal
@@ -216,6 +219,7 @@ def parse(raw: dict) -> Config:
             smtp=dict(a.get("smtp") or {}),
             stale_segment_seconds=int(a.get("stale_segment_seconds", 180)),
             check_interval=int(a.get("check_interval", 60)),
+            memory_alert_mb=int(a.get("memory_alert_mb", 1500) or 0),
             motion_push=bool(a.get("motion_push", False)),
             motion_push_cooldown=int(a.get("motion_push_cooldown", 0)),
             push_on=str(a.get("push_on", "person")),

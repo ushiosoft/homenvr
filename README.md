@@ -52,7 +52,7 @@ and stores recordings on hardware you control.
   noisy single-camera stretches folded into "busy" periods, false alarms
   dismissable.
 - **Push alerts** — ntfy, Discord/Slack webhook, Telegram, or email: health
-  alerts (camera stopped recording, disk full) and **photo pushes on motion**,
+  alerts (camera stopped recording, disk full, homenvr using too much memory) and **photo pushes on motion**,
   filtered by `push_on` (person / person or vehicle / person or animal / person,
   vehicle or animal / any motion), per camera.
   With a *Public address* set, each push links to the event (`/?play=<t>&cam=<id>`).
@@ -219,6 +219,9 @@ codec is re-checked every 10 minutes; restart homenvr to apply at once).
   `tailscale set --hostname`).
 - `.env` must set `WEBRTC_LAN_IP` (the server's LAN IP) and `WEBRTC_TS_IP` (the
   sidecar's tailnet IP) so browsers on the LAN and the tailnet reach go2rtc.
+- The homenvr container is capped at 4 GB of memory (`HOMENVR_MEM_LIMIT` in `.env`,
+  no swap beyond it): if it ever balloons it is restarted on its own instead of
+  dragging the whole host into swap.
 - Only one homenvr may run per NVR + tailnet name: a second instance would record
   twice, push twice and fight for the Tailscale name.
 

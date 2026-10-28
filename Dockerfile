@@ -17,7 +17,9 @@ ADD --checksum=sha256:a91c218fd92b39c2c929b1a08400bc8e85df34a5d474dece920103a2c5
 RUN chmod 644 /models/*
 COPY app app
 RUN chmod 644 app/static/hls.min.js
-ENV HOMENVR_CONFIG=/config/config.yml PYTHONUNBUFFERED=1
+# MALLOC_ARENA_MAX: glibc otherwise gives each worker thread its own 64 MB malloc arena,
+# and frame buffers passed between threads fragment them; memory then creeps up for days.
+ENV HOMENVR_CONFIG=/config/config.yml PYTHONUNBUFFERED=1 MALLOC_ARENA_MAX=2
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz')"
 # Graceful-shutdown timeout: open video streams would otherwise hold a restart for

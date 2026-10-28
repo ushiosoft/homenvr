@@ -114,3 +114,32 @@ def test_send_image_multipart_and_ntfy():
     WebhookNotifier(f"http://127.0.0.1:{port}/wh").send_image("Motion", "cam1", img, "s.jpg", "https://h/?play=1&cam=cam1")
     assert b"cam1\\nhttps://h/?play=1&cam=cam1" in cap['body']
     srv.shutdown()
+
+
+def test_observer_flags_homenvr_memory(tmp_path, monkeypatch):
+    """2026-10-27: homenvr grew to 9.8 GB and stalled the whole server before the kernel
+    killed it. The watchdog now alerts once its own memory passes alerts.memory_alert_mb."""
+    import app.alerts as alerts
+    def observe_with(rss_mb, limit=None):
+        raw = {"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}],
+               "retention": {"min_free_gb": 0}}
+        if limit is not None:
+            raw["alerts"] = {"memory_alert_mb": limit}
+        cfg = parse(raw)
+        monkeypatch.setattr(alerts, "process_rss_mb", lambda: rss_mb)
+        storage = Storage(tmp_path)
+        return {c.key: c for c in alerts.build_observer(cfg, Supervisor(cfg, storage), storage)(time.time())}
+
+    assert parse({"storage_dir": str(tmp_path)}).alerts.memory_alert_mb == 1500
+    checks = observe_with(400)
+    assert checks["homenvr memory"].ok is True
+    checks = observe_with(2100)
+    assert checks["homenvr memory"].ok is False and "2100 MB" in checks["homenvr memory"].message
+    assert "homenvr memory" not in observe_with(2100, limit=0)     # 0 = off
+    assert "homenvr memory" not in observe_with(None)              # not measurable (not Linux)
+
+
+def test_process_rss_mb_reads_this_process():
+    from app.alerts import process_rss_mb
+    mb = process_rss_mb()
+    assert mb is None or 5 < mb < 100000

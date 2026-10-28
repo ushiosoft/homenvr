@@ -7,6 +7,11 @@ services:
     env_file: .env
     environment:
       TZ: ${TZ:-UTC}
+    # A memory cap (no swap beyond it): if homenvr ever balloons, only it is killed and
+    # restarted (~15 s) instead of the whole host swapping to a halt (it once reached
+    # 9.8 GB). Includes its ffmpeg children (recording, live, review transcodes).
+    mem_limit: ${HOMENVR_MEM_LIMIT:-4g}
+    memswap_limit: ${HOMENVR_MEM_LIMIT:-4g}
     ports:
       - "8971:8080"
     volumes:

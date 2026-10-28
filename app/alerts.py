@@ -200,6 +200,18 @@ class Watchdog:
         return fired
 
 
+def process_rss_mb() -> float | None:
+    """This process's resident memory in MB (None where /proc isn't available)."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except OSError:
+        pass
+    return None
+
+
 def build_observer(cfg, supervisor, storage):
     """Returns an observe(now) -> list[Check] closure over the live system."""
     import shutil
@@ -237,6 +249,15 @@ def build_observer(cfg, supervisor, storage):
             checks.append(Check("disk space", False, msg))
         else:
             checks.append(Check("disk space", True, f"{free / 1024**3:.1f} GB free"))
+        limit = cfg.alerts.memory_alert_mb
+        rss = process_rss_mb() if limit > 0 else None
+        if rss is not None:
+            if rss > limit:
+                checks.append(Check("homenvr memory", False,
+                                    f"homenvr is using {rss:.0f} MB (alert above {limit} MB) — likely a leak; "
+                                    "restart it (Settings → Restart homenvr) before it runs the server out of memory"))
+            else:
+                checks.append(Check("homenvr memory", True, f"{rss:.0f} MB"))
         return checks
 
     return observe

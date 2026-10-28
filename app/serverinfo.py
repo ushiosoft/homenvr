@@ -16,7 +16,7 @@ from pathlib import Path
 from .settings import MASK
 
 ENV_KEYS = ["TZ", "RECORDINGS_DIR", "NVR_PASSWORD", "UI_PASSWORD", "TS_AUTHKEY",
-            "WEBRTC_LAN_IP", "WEBRTC_TS_IP", "LOG_LEVEL"]
+            "WEBRTC_LAN_IP", "WEBRTC_TS_IP", "LOG_LEVEL", "HOMENVR_MEM_LIMIT"]
 _SECRET_KEY = re.compile(r"(pass|token|secret|key|webhook|ntfy_url|auth)", re.I)
 _YAML_FIELD = re.compile(r"(?P<key>[A-Za-z_][\w-]*)(?P<sep>\s*:\s*)(?P<val>\$\{[^}]*\}|\"[^\"]*\"|'[^']*'|[^,{}#\n]+)")
 _URL_CRED = re.compile(r"([a-z][a-z0-9+.-]*://)[^/@\s]+@", re.I)
@@ -87,7 +87,7 @@ def effective(cfg, overlay: dict) -> str:
 
     a = cfg.alerts
     section("alerts", a, ["notifier", "webhook_url", "ntfy_url", "telegram", "smtp", "motion_push", "push_on",
-                          "motion_push_cooldown", "public_url", "stale_segment_seconds", "check_interval"],
+                          "motion_push_cooldown", "public_url", "stale_segment_seconds", "check_interval", "memory_alert_mb"],
             overlay.get("alerts"))
     section("motion", cfg.motion, ["enabled", "sensitivity", "min_gap_seconds", "detect", "detect_confidence"],
             overlay.get("motion"))
