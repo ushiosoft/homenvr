@@ -143,3 +143,40 @@ def test_process_rss_mb_reads_this_process():
     from app.alerts import process_rss_mb
     mb = process_rss_mb()
     assert mb is None or 5 < mb < 100000
+
+
+def test_disk_alert_only_when_retention_cannot_free_space(tmp_path, monkeypatch):
+    """Free space dips below min_free_gb every hour or two as recording fills the disk;
+    retention then deletes grace footage within a minute. Those dips used to send a
+    red/green pair of pushes each time. Now: alert only if grace is empty or free space
+    is under half the minimum."""
+    import shutil
+    from collections import namedtuple
+    import app.alerts as alerts
+    Usage = namedtuple("Usage", "total used free")
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [{"id": "cam1", "record_url": "r", "live_url": "l"}],
+                 "retention": {"min_free_gb": 100}, "alerts": {"memory_alert_mb": 0}})
+    storage = Storage(tmp_path)
+    observe = alerts.build_observer(cfg, Supervisor(cfg, storage), storage)
+
+    def disk(free_gb):
+        monkeypatch.setattr(shutil, "disk_usage", lambda p: Usage(0, 0, int(free_gb * 1024**3)))
+        return {c.key: c for c in observe(time.time())}["disk space"]
+
+    make(tmp_path / "grace", "cam1", time.time() - 9 * 86400, 600)
+    assert disk(150).ok is True
+    assert disk(99.5).ok is True          # below the floor, but grace can be deleted
+    low = disk(40)
+    assert low.ok is False and "under half" in low.message
+    for p in (tmp_path / "grace" / "cam1").iterdir():
+        p.unlink()
+    empty = disk(99.5)
+    assert empty.ok is False and "no grace footage" in empty.message
+
+
+def test_watchdog_logs_each_alert_sent(caplog):
+    n = RecordingNotifier()
+    wd = Watchdog(lambda now: [Check("disk space", False, "only 1 GB free")], n)
+    with caplog.at_level("INFO", logger="app.alerts"):
+        wd.tick()
+    assert "health alert sent: disk space DOWN — only 1 GB free" in caplog.text

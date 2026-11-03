@@ -194,6 +194,7 @@ class Watchdog:
                 self._failing[c.key] = now_failing
                 try:
                     self.notifier.send(c.key, c.message, failing=now_failing)
+                    log.info("health alert sent: %s %s — %s", c.key, "DOWN" if now_failing else "OK", c.message)
                 except Exception:
                     log.exception("notifier failed for %s", c.key)
                 fired.append((c.key, now_failing))
@@ -237,18 +238,25 @@ def build_observer(cfg, supervisor, storage):
                                     f"recording but no new data for {age}s (stream stalled?)"))
             else:
                 checks.append(Check(f"camera {cam.name}", True, "recording normally"))
+        # Dipping below min_free_gb is routine: it is what triggers retention to delete
+        # grace footage (within a minute). Alert only when that can't fix it: grace is
+        # empty, or free space is under half the minimum (filling faster than deletion).
         free = shutil.disk_usage(storage.root).free
-        min_free = cfg.retention.min_free_gb * 1024**3
-        if min_free > 0 and free < min_free:
-            msg = f"only {free / 1024**3:.1f} GB free (min {cfg.retention.min_free_gb})"
-            # If there's nothing left in grace to auto-delete, saved clips may be the cause.
-            if not storage.grace_segments():
-                saved_gb = storage.saved_bytes() / 1024**3
-                if saved_gb > 1:
-                    msg += f"; grace empty, {saved_gb:.1f} GB in saved/ (never auto-deleted) — free space manually"
+        min_gb = cfg.retention.min_free_gb
+        min_free = min_gb * 1024**3
+        free_gb = free / 1024**3
+        if min_free > 0 and free < min_free / 2:
+            checks.append(Check("disk space", False,
+                                f"only {free_gb:.1f} GB free, under half the minimum ({min_gb} GB) — "
+                                "the disk is filling faster than old footage can be deleted"))
+        elif min_free > 0 and free < min_free and not storage.grace_segments():
+            msg = f"only {free_gb:.1f} GB free (min {min_gb}) and no grace footage left to delete"
+            saved_gb = storage.saved_bytes() / 1024**3
+            if saved_gb > 1:
+                msg += f"; {saved_gb:.1f} GB in saved/ (never auto-deleted) — free space manually"
             checks.append(Check("disk space", False, msg))
         else:
-            checks.append(Check("disk space", True, f"{free / 1024**3:.1f} GB free"))
+            checks.append(Check("disk space", True, f"{free_gb:.1f} GB free"))
         limit = cfg.alerts.memory_alert_mb
         rss = process_rss_mb() if limit > 0 else None
         if rss is not None:
