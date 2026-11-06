@@ -896,7 +896,9 @@ class Supervisor:
 
     async def _watchdog_loop(self) -> None:
         from .alerts import Watchdog, build_observer, make_notifier
+        from .memdiag import MemoryDiag
 
+        memdiag = MemoryDiag()
         notifier = make_notifier(self.cfg.alerts)
         self.watchdog = Watchdog(build_observer(self.cfg, self, self.storage), notifier)
         # Grace period so cameras can connect before the first evaluation.
@@ -906,6 +908,10 @@ class Supervisor:
                 await asyncio.to_thread(self.watchdog.tick)
             except Exception:
                 log.exception("watchdog failed")
+            try:
+                memdiag.check(self.cfg.alerts.memory_alert_mb)
+            except Exception:
+                log.exception("memory diagnostics failed")
             await asyncio.sleep(self.cfg.alerts.check_interval)
 
     async def stop(self) -> None:

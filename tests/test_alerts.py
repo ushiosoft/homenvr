@@ -30,12 +30,22 @@ def test_watchdog_edge_triggered():
     assert [s[1] for s in n.sent] == [True, False]
 
 
-def test_notifier_failure_does_not_crash_tick():
-    class Boom:
-        def send(self, *a, **k):
-            raise RuntimeError("down")
-    wd = Watchdog(lambda now: [Check("x", False, "m")], Boom())
-    assert wd.tick() == [("x", True)]  # still records the transition despite notifier error
+def test_notifier_failure_does_not_crash_tick_and_retries():
+    """2026-11-04: the memory alert hit a Discord connection error and was never sent."""
+    class Flaky:
+        fails = 1
+        sent = []
+        def send(self, title, message, *, failing):
+            if self.fails:
+                self.fails -= 1
+                raise RuntimeError("down")
+            self.sent.append((title, failing))
+    n = Flaky()
+    wd = Watchdog(lambda now: [Check("x", False, "m")], n)
+    assert wd.tick() == []             # send failed: not recorded as sent
+    assert wd.tick() == [("x", True)]  # retried on the next check
+    assert wd.tick() == []             # and not repeated after that
+    assert n.sent == [("x", True)]
 
 
 def test_make_notifier_defaults_to_null():

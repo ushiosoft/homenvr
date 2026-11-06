@@ -2,7 +2,8 @@
 a stream goes silent, or the disk fills.
 
 Alerts are edge-triggered: one notification when a check starts failing, one
-when it recovers. No repeat spam while a condition persists.
+when it recovers. No repeat spam while a condition persists; a notification that
+fails to send is retried on the next check.
 """
 from __future__ import annotations
 
@@ -191,12 +192,14 @@ class Watchdog:
             was_failing = self._failing.get(c.key, False)
             now_failing = not c.ok
             if now_failing != was_failing:
-                self._failing[c.key] = now_failing
                 try:
                     self.notifier.send(c.key, c.message, failing=now_failing)
-                    log.info("health alert sent: %s %s — %s", c.key, "DOWN" if now_failing else "OK", c.message)
-                except Exception:
-                    log.exception("notifier failed for %s", c.key)
+                except Exception as e:
+                    # Not recorded as sent, so the next tick tries again (unless it's resolved by then).
+                    log.warning("notifier failed for %s (retrying next check): %s", c.key, e)
+                    continue
+                self._failing[c.key] = now_failing
+                log.info("health alert sent: %s %s — %s", c.key, "DOWN" if now_failing else "OK", c.message)
                 fired.append((c.key, now_failing))
         return fired
 
