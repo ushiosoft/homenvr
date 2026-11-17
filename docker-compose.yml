@@ -12,6 +12,13 @@ services:
     # 9.8 GB). Includes its ffmpeg children (recording, live, review transcodes).
     mem_limit: ${HOMENVR_MEM_LIMIT:-4g}
     memswap_limit: ${HOMENVR_MEM_LIMIT:-4g}
+    # Rotate the container log (Docker keeps it forever by default; a camera with broken
+    # timestamps once grew it to millions of lines).
+    logging:
+      driver: json-file
+      options:
+        max-size: 50m
+        max-file: "3"
     ports:
       - "8971:8080"
     volumes:

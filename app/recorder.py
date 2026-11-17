@@ -194,6 +194,12 @@ async def snapshot_from_live(live_dir, cam_id: str, width: int = 640, timeout: f
             pass
 
 
+# A detection burst is ~32 frames (16 s at 2 fps). Cap what ffmpeg may produce: when the
+# live stream's timestamps jump (seen for hours on one camera), fps= duplicates frames to
+# fill the "gap", and one burst became thousands of frames and GBs of decoded images.
+MAX_BURST_FRAMES = 60
+
+
 async def live_frames(live_dir, cam_id: str, since: float, max_segments: int = 3, fps: float = 2,
                       width: int = 640, timeout: float = 20, rot: int = 0, with_start: bool = False):
     """JPEG frames (fps per second) from the live segments finished at or after the
@@ -216,7 +222,7 @@ async def live_frames(live_dir, cam_id: str, since: float, max_segments: int = 3
     try:
         proc = await asyncio.create_subprocess_exec(
             FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", tmp, "-ss", f"{skip:.2f}", "-vf", vf,
-            "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "-",
+            "-frames:v", str(MAX_BURST_FRAMES), "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "-",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
             out, err = await asyncio.wait_for(proc.communicate(), timeout)
@@ -399,8 +405,8 @@ async def recording_frames(storage: Storage, cam: Camera, start: float, end: flo
     vf = f"fps={fps},{rv + ',' if rv else ''}scale={width}:-2"
     graph = ["-filter_complex", f"{joined};[v]{vf}[o]", "-map", "[o]"] if joined else ["-vf", vf]
     proc = await asyncio.create_subprocess_exec(
-        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", *inputs, *graph, "-q:v", "4",
-        "-f", "image2pipe", "-c:v", "mjpeg", "-", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        FFMPEG, "-hide_banner", "-nostdin", "-loglevel", "error", *inputs, *graph,
+        "-frames:v", str(MAX_BURST_FRAMES), "-q:v", "4", "-f", "image2pipe", "-c:v", "mjpeg", "-", stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
     except asyncio.TimeoutError:
@@ -494,6 +500,31 @@ def live_cmd(cam: Camera, cfg: Config, info: dict, out_dir: Path, url: str | Non
     ]
 
 
+class LogLimiter:
+    """Logs at most `per_minute` ffmpeg lines per window, then one count of the rest.
+    One camera's live stream once logged ~110 timestamp warnings a second for hours."""
+
+    def __init__(self, prefix: str, per_minute: int = 20, window: float = 60.0):
+        self.prefix, self.per_minute, self.window = prefix, per_minute, window
+        self._start, self._logged, self._dropped = float("-inf"), 0, 0
+
+    def warning(self, msg: str, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        if now - self._start >= self.window:
+            self.flush()
+            self._start, self._logged = now, 0
+        if self._logged < self.per_minute:
+            self._logged += 1
+            log.warning("%s %s", self.prefix, msg)
+        else:
+            self._dropped += 1
+
+    def flush(self) -> None:
+        if self._dropped:
+            log.warning("%s %d more ffmpeg messages in the last minute not logged", self.prefix, self._dropped)
+            self._dropped = 0
+
+
 @dataclass
 class ProcState:
     kind: str
@@ -557,11 +588,13 @@ class Worker:
                 if self.kind == "record":
                     stamp_fix = asyncio.ensure_future(self._fix_first_stamp(self.state.started_at))
                 assert self._proc.stderr
+                limiter = LogLimiter(f"[{self.cam.id}/{self.kind}]")
                 async for line in self._proc.stderr:
                     msg = redact(line.decode(errors="replace").rstrip())
                     if msg:
                         self.state.log_tail.append(msg)
-                        log.warning("[%s/%s] %s", self.cam.id, self.kind, msg)
+                        limiter.warning(msg)
+                limiter.flush()
                 rc = await self._proc.wait()
                 self.state.last_error = self.state.log_tail[-1] if self.state.log_tail else f"ffmpeg exited {rc}"
             except asyncio.CancelledError:
