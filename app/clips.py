@@ -208,6 +208,8 @@ class ClipConverter:
 
 AUTO_SUFFIX = "-auto.mp4"
 AUTO_MAX_SECONDS = 300   # one incident's clip is at most this long; later pushes start a new one
+AUTO_CHAIN_GAP = 90      # motion this close before / after a push is part of the same incident
+AUTO_MAX_LEAD = 120      # ... reaching back at most this far before the first push
 
 
 def is_auto(name: str) -> bool:
@@ -269,6 +271,12 @@ class AutoSaver:
     is cut per camera that saw it: the pushing camera(s), plus any camera with a
     person/vehicle-labelled event in the window. Pushes landing inside the open
     incident extend it (up to AUTO_MAX_SECONDS) instead of making overlapping clips.
+
+    The push is often not where the incident starts: deer that only became a
+    "person" on the third event, a bird hopping about for two minutes before one
+    frame looked like a person. So the clip also takes in the pushing camera's
+    motion that chains up to the push (events <= AUTO_CHAIN_GAP apart, reaching
+    back up to AUTO_MAX_LEAD) and continues after it, like the incident in playback.
     """
 
     SETTLE = 15  # seconds after the incident's end before cutting (recorder flush)
@@ -287,21 +295,56 @@ class AutoSaver:
             job["end"] = max(job["end"], ts + a.after)
             job["cams"].add(cam_id)
             return
-        self.job = {"start": ts - a.before, "end": ts + a.after, "cams": {cam_id}}
+        self.job = {"start": ts - a.before, "end": ts + a.after, "cams": {cam_id}, "first": ts}
         task = asyncio.ensure_future(self._run(self.job))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
     async def _run(self, job: dict) -> None:
         import time
-        while (wait := job["end"] + self.SETTLE - time.time()) > 0:
-            await asyncio.sleep(wait)   # the end may have moved meanwhile
+        while True:
+            while (wait := job["end"] + self.SETTLE - time.time()) > 0:
+                await asyncio.sleep(wait)   # the end may have moved meanwhile
+            try:
+                if not await asyncio.to_thread(self.extend, job):
+                    break                   # no motion carrying on past the end
+            except Exception as e:  # noqa: BLE001
+                log.warning("auto-save: could not look up the incident's motion: %s", e)
+                break
         if self.job is job:
             self.job = None
         try:
             await self.save(job)
         except Exception as e:  # noqa: BLE001
             log.warning("auto-save failed: %s", e)
+
+    def extend(self, job: dict) -> bool:
+        """Widen the job to the pushing cameras' motion chained to it (see the class
+        docstring), within AUTO_MAX_SECONDS. True if the end moved (wait for it)."""
+        if self.events is None:
+            return False
+        a = self.cfg.autosave
+        first = job.get("first", job["start"] + a.before)
+        lo = first - AUTO_MAX_LEAD - AUTO_CHAIN_GAP
+        times = sorted(e["ts"] for e in self.events.query_all(lo, job["end"] + AUTO_CHAIN_GAP)
+                       if e["camera"] in job["cams"])
+        t = first
+        for ts in reversed([x for x in times if x < first]):
+            if t - ts > AUTO_CHAIN_GAP or first - ts > AUTO_MAX_LEAD:
+                break
+            t = ts
+        # Lead-in only as far as the clip's length cap allows.
+        job["start"] = min(job["start"], max(t - a.before, job["end"] - AUTO_MAX_SECONDS))
+        t = job["end"] - a.after
+        for ts in (x for x in times if x > t):
+            if ts - t > AUTO_CHAIN_GAP:
+                break
+            t = ts
+        end = min(t + a.after, job["start"] + AUTO_MAX_SECONDS)
+        if end > job["end"]:
+            job["end"] = end
+            return True
+        return False
 
     def cameras_for(self, job: dict) -> list[str]:
         cams = set(job["cams"])

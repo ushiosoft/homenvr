@@ -120,3 +120,53 @@ def test_effective_config_shows_settings_overlay(tmp_path):
     assert "SECRET" not in out and "webhook_url: " + MASK in out
     assert "rotation: 90" in out and "# set in Settings: rotation" in out
     assert "pw@" not in out
+
+
+def _autosave_run(tmp_path, monkeypatch, events, pushes):
+    """Run an AutoSaver over pushes (offsets from a minute ago); returns (start, end)
+    offsets of each clip built, relative to the same base."""
+    cfg = parse({"storage_dir": str(tmp_path), "cameras": [
+        {"id": c, "record_url": "r", "live_url": "l"} for c in ("cam1", "cam2")]})
+    base = time.time() - 600            # long past: cut at once
+
+    class Events:
+        def query_all(self, a, b):
+            return [{"camera": c, "ts": base + t, "label": ""} for c, t in events if a <= base + t <= b]
+    built = []
+
+    async def fake_build(storage, cam, start, end, out, max_s):
+        assert end - start <= max_s
+        built.append((cam, round(start - base), round(end - base)))
+        out.write_bytes(b"clip")
+    monkeypatch.setattr(clips, "build_clip", fake_build)
+    monkeypatch.setattr(clips.AutoSaver, "SETTLE", 0)
+    a = clips.AutoSaver(cfg, Storage(tmp_path), Events())
+
+    async def run():
+        for t in pushes:
+            a.pushed("cam1", base + t)
+        await asyncio.sleep(0.3)
+        await a.stop()
+    asyncio.run(run())
+    return built
+
+
+def test_autosave_clip_starts_where_the_incident_does(tmp_path, monkeypatch):
+    # Deer: two "animal" events before the third one pushed as "person" (2026-11-17).
+    # The event 247 s earlier is a separate incident; cam2's motion is another camera's.
+    events = [("cam1", 0), ("cam1", 247), ("cam1", 264), ("cam1", 285), ("cam2", 250)]
+    assert _autosave_run(tmp_path, monkeypatch, events, [285]) == [("cam1", 237, 315)]
+
+
+def test_autosave_clip_follows_motion_after_the_push(tmp_path, monkeypatch):
+    events = [("cam1", 100), ("cam1", 125), ("cam1", 180), ("cam1", 400)]
+    # Push at 100; motion carries on to 180 (chained), 400 is a later incident.
+    assert _autosave_run(tmp_path, monkeypatch, events, [100]) == [("cam1", 90, 210)]
+
+
+def test_autosave_lead_in_is_bounded(tmp_path, monkeypatch):
+    # A camera that fires every 30 s all along: reach back AUTO_MAX_LEAD at most,
+    # and never past the length cap.
+    events = [("cam1", t) for t in range(0, 601, 30)]
+    (cam, s, e), = _autosave_run(tmp_path, monkeypatch, events, [300])
+    assert cam == "cam1" and s == 300 - clips.AUTO_MAX_LEAD - 10 and e - s <= clips.AUTO_MAX_SECONDS
