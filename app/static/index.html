@@ -110,6 +110,16 @@
   .iconbtn:hover { background:rgba(0,0,0,.85); }
   .playtap { position:absolute; inset:0; margin:auto; width:140px; height:40px; background:rgba(0,0,0,.7); color:#fff; border:0; border-radius:8px; cursor:pointer; z-index:4; }
   @media (hover:none) { .tile .ctls { opacity:1; } .iconbtn { width:36px; height:36px; } }
+  /* Touch fullscreen playback: just play controls + progress bar along the bottom, as
+     compact as live's; speed, quality, download, keep... wait until fullscreen exits. */
+  @media (hover:none) {
+    .transport.fsbar { left:8px; right:8px; bottom:calc(8px + env(safe-area-inset-bottom)); padding:2px 6px; min-height:0; gap:2px; justify-content:center; }
+    .transport.fsbar #tp-rev .right, .transport.fsbar .syncchip { display:none; }
+    .transport.fsbar .ibtn { width:38px; height:38px; }
+    .transport.fsbar .playbtn { width:40px; height:40px; }
+    .transport.fsbar .time { font-size:14px; }
+    .transport.fsbar .scrub { padding:0 4px 2px; }
+  }
   .spin { width:22px; height:22px; border:2px solid #3a414c; border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; flex:none; }
   @keyframes spin { to { transform:rotate(360deg); } }
   @media (prefers-reduced-motion:reduce) { .spin, .spinner { animation-duration:2s; } }
