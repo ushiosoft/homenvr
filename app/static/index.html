@@ -443,6 +443,16 @@
     #tp-live.pgrid .right { display:contents; }
     #tp-live.pgrid .btn { width:100%; justify-content:center; min-width:0; overflow:hidden; text-overflow:ellipsis; }
     #tp-live.pgrid .btn span { overflow:hidden; text-overflow:ellipsis; }
+    /* Playback: the same even two-column grid — speed | quality, sound | boxes,
+       download | keep, then "skip quiet gaps" across the bottom. */
+    #tp-rev .right { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:0 4px 4px; }
+    body.reviewing.scrolled #tp-rev .right { display:none; }
+    #tp-rev .right > * { width:100%; min-width:0; height:40px; justify-content:center; padding:0 8px; overflow:hidden; }
+    #tp-rev .right .sel-lbl { border:1px solid var(--line2); border-radius:8px; background:var(--raised); padding:0 4px 0 10px; gap:4px; justify-content:space-between; }
+    #tp-rev .right .sel-lbl select { flex:1; min-width:0; border:0; background:transparent; padding:6px 2px; }
+    #tp-rev .right .chk { grid-column:1 / -1; order:1; height:32px; }
+    #tp-rev .right .btn svg { flex:none; }
+    #tp-rev .right .btn span { overflow:hidden; text-overflow:ellipsis; }   /* long camera names */
     aside.incidents { max-height:none; min-width:0; flex-basis:100%; }
     section.timeline { padding:8px 10px 6px; }
     .legend, .tl-hint, #zoomcap { display:none; }
@@ -1545,7 +1555,7 @@ function renderTransport() {
   renderTransportLabels();
 }
 function renderTransportLabels() {
-  $('#download').textContent = `Download ${camName(S.selCam)}`;
+  $('#download').innerHTML = `<span>Download ${esc(camName(S.selCam))}</span>`;
   const ci = currentIncident();
   $('#keep').textContent = ci ? 'Keep incident' : 'Keep 60 s';
 }
